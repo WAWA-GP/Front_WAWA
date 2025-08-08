@@ -1,4 +1,81 @@
 import 'package:flutter/material.dart';
+import 'dart:math'; // 반지름 계산을 위해 math 라이브러리 추가
+
+// --- 새로 추가된 부분: 캐릭터 확대 애니메이션 화면 ---
+class CharacterAnimationScreen extends StatefulWidget {
+  final String imagePath;
+
+  const CharacterAnimationScreen({Key? key, required this.imagePath}) : super(key: key);
+
+  @override
+  _CharacterAnimationScreenState createState() => _CharacterAnimationScreenState();
+}
+
+class _CharacterAnimationScreenState extends State<CharacterAnimationScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1500), // 애니메이션 지속 시간
+      vsync: this,
+    );
+
+    // 이미지가 0.1배에서 100배까지 커지는 애니메이션 설정
+    _scaleAnimation = Tween<double>(begin: 0.1, end: 6.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+
+    // 애니메이션이 완료되면 MainScreen으로 이동
+    _controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          // 부드러운 전환을 위해 FadeTransition 사용
+          PageRouteBuilder(
+            pageBuilder: (context, animation, secondaryAnimation) => MainScreen(),
+            transitionsBuilder: (context, animation, secondaryAnimation, child) {
+              return FadeTransition(opacity: animation, child: child);
+            },
+            transitionDuration: Duration(milliseconds: 500),
+          ),
+              (route) => false,
+        );
+      }
+    });
+
+    // 애니메이션 시작
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Color(0xFFF5F1E8), // 기존 배경색과 동일하게 설정
+      body: Center(
+        child: ScaleTransition(
+          scale: _scaleAnimation,
+          child: Image.asset(
+            widget.imagePath,
+            width: 50,
+            height: 50,
+            fit: BoxFit.contain,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 void main() {
   runApp(MyApp());
@@ -879,13 +956,31 @@ class _CharacterSelectionScreenState extends State<CharacterSelectionScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
+                  // 이 onPressed 부분을 수정합니다.
                   onPressed: () {
-                    // 홈 화면으로 이동
-                    Navigator.pushAndRemoveUntil(
-                      context,
-                      MaterialPageRoute(builder: (context) => MainScreen()),
-                          (route) => false,
-                    );
+                    // 선택된 캐릭터가 있는지 확인
+                    if (AppState.selectedCharacterImage != null) {
+                      // 새로 만든 애니메이션 화면으로 이동
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        // 화면 전환 시 기본 애니메이션이 없도록 PageRouteBuilder 사용
+                        PageRouteBuilder(
+                          pageBuilder: (context, animation, secondaryAnimation) =>
+                              CharacterAnimationScreen(
+                                imagePath: AppState.selectedCharacterImage!,
+                              ),
+                          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                            return child; // 아무 효과 없이 바로 전환
+                          },
+                        ),
+                            (route) => false,
+                      );
+                    } else {
+                      // 캐릭터가 선택되지 않았을 경우 사용자에게 알림
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('함께 공부할 캐릭터를 선택해주세요!')),
+                      );
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.brown.shade400,
@@ -985,13 +1080,15 @@ class _MainScreenState extends State<MainScreen> {
                       Expanded(
                         child: Container(
                           height: 70, // 캐릭터 이미지와 동일한 높이
-                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          padding: EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
                           decoration: BoxDecoration(
                             color: Colors.brown,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center, // 중앙 정렬
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            // 중앙 정렬
                             children: [
                               Text(
                                 characterName,
@@ -1021,7 +1118,8 @@ class _MainScreenState extends State<MainScreen> {
                         onTap: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (context) => SettingsScreen()),
+                            MaterialPageRoute(
+                                builder: (context) => SettingsScreen()),
                           );
                         },
                         child: Container(
@@ -1074,15 +1172,18 @@ class _MainScreenState extends State<MainScreen> {
                     _buildMenuButton(
                       context,
                       title: '단어장',
-                      icon: Icons.book, // fallback용 아이콘
+                      icon: Icons.book,
+                      // fallback용 아이콘
                       color: Colors.lightBlue,
-                      imagePath: 'assets/vocabulary.png', // 이미지 경로 지정
+                      imagePath: 'assets/vocabulary.png',
+                      // 이미지 경로 지정
                       onTap: () {
                         // 디버깅: 이미지 로딩 확인
                         print('단어장 버튼 클릭됨');
                         Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (context) => VocabularyScreen()),
+                          MaterialPageRoute(builder: (context) =>
+                              VocabularyScreen()),
                         );
                       },
                     ),
@@ -1093,11 +1194,13 @@ class _MainScreenState extends State<MainScreen> {
                       title: '학습',
                       icon: Icons.school,
                       color: Colors.lightBlue,
-                      imagePath: 'assets/study.png', // 학습 이미지 추가
+                      imagePath: 'assets/study.png',
+                      // 학습 이미지 추가
                       onTap: () {
                         Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (context) => StudyScreen()),
+                          MaterialPageRoute(builder: (context) =>
+                              StudyScreen()),
                         );
                       },
                     ),
@@ -1108,11 +1211,13 @@ class _MainScreenState extends State<MainScreen> {
                       title: '상황별 회화',
                       icon: Icons.chat_bubble_outline,
                       color: Colors.lightBlue,
-                      imagePath: 'assets/conversation.png', // 회화 이미지 추가
+                      imagePath: 'assets/conversation.png',
+                      // 회화 이미지 추가
                       onTap: () {
                         Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (context) => SituationScreen()),
+                          MaterialPageRoute(builder: (context) =>
+                              SituationScreen()),
                         );
                       },
                     ),
@@ -1121,13 +1226,16 @@ class _MainScreenState extends State<MainScreen> {
                     _buildMenuButton(
                       context,
                       title: '커뮤니티',
-                      icon: Icons.forum, // fallback용 아이콘
+                      icon: Icons.forum,
+                      // fallback용 아이콘
                       color: Colors.lightBlue,
-                      imagePath: 'assets/community.png', // 커뮤니티 이미지 사용
+                      imagePath: 'assets/community.png',
+                      // 커뮤니티 이미지 사용
                       onTap: () {
                         Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (context) => CommunityScreen()),
+                          MaterialPageRoute(builder: (context) =>
+                              CommunityScreen()),
                         );
                       },
                     ),
@@ -1169,12 +1277,14 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  // MainScreen 클래스 내부
+
   Widget _buildMenuButton(BuildContext context, {
     required String title,
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
-    String? imagePath, // 이미지 경로 추가 (선택적)
+    String? imagePath,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -1187,43 +1297,35 @@ class _MainScreenState extends State<MainScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              padding: EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(12),
+            // 1. 이미지/아이콘 크기 증가 (60 -> 70)
+            imagePath != null
+                ? Container(
+              width: 70,
+              height: 70,
+              child: Image.asset(
+                imagePath,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return Icon(
+                    icon,
+                    size: 70,
+                    color: Colors.brown.shade700,
+                  );
+                },
               ),
-              child: imagePath != null
-                  ? Container(
-                width: 40,
-                height: 40,
-                child: Image.asset(
-                  imagePath,
-                  width: 40,
-                  height: 40,
-                  fit: BoxFit.contain, // 이미지 비율 유지하면서 컨테이너에 맞춤
-                  // color 속성 제거 - 배경 투명도 유지
-                  errorBuilder: (context, error, stackTrace) {
-                    // 이미지 로딩 실패 시 기본 아이콘으로 대체
-                    return Icon(
-                      icon, // 전달받은 icon 사용
-                      size: 50, // 아이콘 크기도 증가
-                      color: Colors.white,
-                    );
-                  },
-                ),
-              )
-                  : Icon(
-                icon, // 이미지가 없으면 아이콘 사용
-                size: 50, // 아이콘 크기 증가
-                color: Colors.white,
-              ),
+            )
+                : Icon(
+              icon,
+              size: 70,
+              color: Colors.brown.shade700,
             ),
-            SizedBox(height: 12),
+            // 2. 이미지와 텍스트 사이 간격 증가 (12 -> 15)
+            SizedBox(height: 15),
+            // 3. 텍스트 크기 증가 (16 -> 17)
             Text(
               title,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 17,
                 fontWeight: FontWeight.bold,
                 color: Colors.brown.shade700,
               ),
@@ -1235,31 +1337,161 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-// 각 메뉴별 페이지들
+// 이하 나머지 화면들의 코드는 이전과 동일하게 유지됩니다.
+// (VocabularyScreen, StudyScreen, SituationScreen, CommunityScreen 등...)
+
+// 단어장 메인 화면 (수정됨)
 class VocabularyScreen extends StatefulWidget {
   @override
   _VocabularyScreenState createState() => _VocabularyScreenState();
 }
 
 class _VocabularyScreenState extends State<VocabularyScreen> {
-  TextEditingController _searchController = TextEditingController();
-  bool isStarred = false;
-  bool isBookmarked = false;
+  // 단어장 목록의 데이터 구조 변경
+  final List<Map<String, dynamic>> _myWordbooks = [];
+
+  final List<String> _pickTags = ['#중고교', '#토익토플', '#가장 많이', '#동물', '#음식', '#식물'];
+
+  // 단어장 생성 함수
+  void _createNewWordbook() async {
+    final newWordbookName = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => WordbookCreateScreen()),
+    );
+
+    if (newWordbookName != null && newWordbookName.isNotEmpty) {
+      setState(() {
+        _myWordbooks.add({'name': newWordbookName, 'words': []});
+      });
+    }
+  }
+
+  // 단어장 상세 화면으로 이동하고, 수정된 데이터를 받아오는 함수
+  void _navigateToDetail(int index) async {
+    final updatedWords = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WordbookDetailScreen(wordbook: _myWordbooks[index]),
+      ),
+    );
+
+    if (updatedWords != null && updatedWords is List<Map<String, dynamic>>) {
+      setState(() {
+        _myWordbooks[index]['words'] = updatedWords;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 카운트 계산
+    int totalCount = 0;
+    int memorizedCount = 0;
+    _myWordbooks.forEach((wb) {
+      totalCount += (wb['words'] as List).length;
+      memorizedCount += (wb['words'] as List).where((w) => w['isMemorized'] == true).length;
+    });
+    int notMemorizedCount = totalCount - memorizedCount;
+
+    return Scaffold(
+      backgroundColor: Color(0xFFF5F1E8),
+      appBar: AppBar(
+        title: Text('단어장', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.brown.shade700)),
+        backgroundColor: Color(0xFFF5F1E8),
+        elevation: 0,
+        leading: IconButton(icon: Icon(Icons.arrow_back, color: Colors.brown.shade700), onPressed: () => Navigator.pop(context)),
+        actions: [IconButton(icon: Icon(Icons.menu, color: Colors.brown.shade700), onPressed: () {})],
+      ),
+      body: ListView(
+        padding: EdgeInsets.all(16),
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildStatusCard('전체', totalCount.toString(), Colors.blue.shade700),
+              _buildStatusCard('미암기', notMemorizedCount.toString(), Colors.red.shade700),
+              _buildStatusCard('암기', memorizedCount.toString(), Colors.green.shade700),
+            ],
+          ),
+          SizedBox(height: 24),
+          _buildSectionHeader('단어장 목록', onAdd: _createNewWordbook),
+          SizedBox(height: 10),
+          _myWordbooks.isEmpty
+              ? Text('생성된 단어장이 없습니다.', style: TextStyle(color: Colors.grey.shade600))
+              : Column(
+            children: List.generate(_myWordbooks.length, (index) {
+              return _buildWordbookItem(_myWordbooks[index], index);
+            }),
+          ),
+          SizedBox(height: 30),
+          _buildSectionHeader('Pick 단어장', showAddButton: false),
+          Text('학습하고 싶은 단어장을 골라보세요', style: TextStyle(color: Colors.grey.shade700)),
+          SizedBox(height: 16),
+          Wrap(spacing: 10, runSpacing: 10, children: _pickTags.map((tag) => Chip(label: Text(tag))).toList()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusCard(String title, String count, Color color) => Expanded(child: Card(child: Padding(padding: const EdgeInsets.symmetric(vertical: 20.0), child: Column(children: [Text(title, style: TextStyle(fontSize: 16, color: Colors.grey.shade800)), SizedBox(height: 8), Text(count, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color))]))));
+  Widget _buildSectionHeader(String title, {bool showAddButton = true, VoidCallback? onAdd}) => Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), if (showAddButton) IconButton(icon: Icon(Icons.add, color: Colors.brown.shade600), onPressed: onAdd)]);
+  Widget _buildWordbookItem(Map<String, dynamic> wordbook, int index) => ListTile(
+    title: Text(wordbook['name']),
+    subtitle: Text('단어 ${wordbook['words'].length}개'),
+    leading: Icon(Icons.book, color: Colors.brown.shade400),
+    trailing: Icon(Icons.arrow_forward_ios, size: 16),
+    onTap: () => _navigateToDetail(index),
+  );
+}
+
+// --- 새로 추가된 부분: 단어 검색 및 추가 화면 ---
+class WordSearchScreen extends StatefulWidget {
+  @override
+  _WordSearchScreenState createState() => _WordSearchScreenState();
+}
+
+class _WordSearchScreenState extends State<WordSearchScreen> {
+  final TextEditingController _searchController = TextEditingController();
+  Map<String, dynamic>? _foundWord; // 찾은 단어의 정보를 저장
+
+  // 임시 단어 데이터베이스 (실제 앱에서는 API나 로컬 DB를 사용)
+  final Map<String, Map<String, dynamic>> _mockWordDB = {
+    'reservation': {
+      'word': 'reservation',
+      'meanings': ['1. 명사: 예약', '2. 명사: 의구심/거리낌'],
+      'pronunciation': '미국식 [ˌrezərˈveɪʃn]',
+    },
+    'flutter': {
+      'word': 'flutter',
+      'meanings': ['1. 동사: (빠르고 가볍게) 흔들(리)다', '2. 명사: 설렘, 두근거림'],
+      'pronunciation': '미국식 [ˈflʌtər]',
+    },
+    'apple': {
+      'word': 'apple',
+      'meanings': ['1. 명사: 사과'],
+      'pronunciation': '미국식 [ˈæpl]',
+    },
+    'code': {
+      'word': 'code',
+      'meanings': ['1. 명사: 암호, 부호', '2. 명사: 코드, 규범', '3. 동사: 코딩하다'],
+      'pronunciation': '미국식 [koʊd]',
+    }
+  };
+
+  void _searchWord() {
+    final query = _searchController.text.trim().toLowerCase();
+    setState(() {
+      _foundWord = _mockWordDB[query];
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Color(0xFFF5F1E8),
       appBar: AppBar(
-        title: Text(
-          '단어장',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Colors.brown.shade700,
-          ),
-        ),
-        backgroundColor: Color(0xFFF5F1E8),
+        title: Text('단어 검색', style: TextStyle(color: Colors.brown.shade700, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: Colors.brown.shade700),
@@ -1267,123 +1499,123 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
         ),
       ),
       body: Padding(
-        padding: EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // 검색창
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.brown.shade300),
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: '찾고 싶은 단어를 입력하세요',
+                suffixIcon: IconButton(
+                  icon: Icon(Icons.search),
+                  onPressed: _searchWord,
+                ),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               ),
-              child: Row(
-                children: [
-                  Icon(Icons.search, color: Colors.grey.shade600),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: 'reservation',
-                        border: InputBorder.none,
-                        hintStyle: TextStyle(color: Colors.grey.shade500),
+              onSubmitted: (_) => _searchWord(),
+              autofocus: true,
+            ),
+            SizedBox(height: 20),
+
+            // 검색 결과
+            if (_foundWord != null)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(_foundWord!['word'], style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      SizedBox(height: 10),
+                      ...(_foundWord!['meanings'] as List<String>).map((m) => Text(m, style: TextStyle(fontSize: 16))),
+                      SizedBox(height: 10),
+                      Text(_foundWord!['pronunciation'], style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey.shade600)),
+                      SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        icon: Icon(Icons.add),
+                        label: Text('이 단어 추가하기'),
+                        onPressed: () {
+                          // '추가' 버튼을 누르면 찾은 단어 정보를 이전 화면으로 돌려줌
+                          Navigator.pop(context, _foundWord);
+                        },
                       ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
+              )
+            else
+              Expanded(
+                child: Center(child: Text('검색 결과가 여기에 표시됩니다.')),
               ),
-            ),
-            SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-            // 단어 정보
-            Row(
-              children: [
-                Text(
-                  'reservation',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
-                  ),
-                ),
-                SizedBox(width: 8),
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      isStarred = !isStarred;
-                    });
-                  },
-                  child: Icon(
-                    isStarred ? Icons.star : Icons.star_border,
-                    color: isStarred ? Colors.orange : Colors.grey,
-                  ),
-                ),
-                SizedBox(width: 4),
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      isBookmarked = !isBookmarked;
-                    });
-                  },
-                  child: Icon(
-                    isBookmarked ? Icons.bookmark : Icons.bookmark_border,
-                    color: isBookmarked ? Colors.orange : Colors.grey,
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 16),
+// --- 새로 추가된 부분: 단어장 생성 화면 ---
+class WordbookCreateScreen extends StatefulWidget {
+  @override
+  _WordbookCreateScreenState createState() => _WordbookCreateScreenState();
+}
 
-            // 단어 뜻
-            Text(
-              '1. 명사: 예약',
-              style: TextStyle(fontSize: 16, color: Colors.black87),
-            ),
-            SizedBox(height: 4),
-            Text(
-              '2. 명사: (개념, 생각에 대한) 의구심/거리낌',
-              style: TextStyle(fontSize: 16, color: Colors.black87),
-            ),
-            SizedBox(height: 4),
-            Text(
-              '3. 명사: (미국에서) 인디언 보호 구역',
-              style: TextStyle(fontSize: 16, color: Colors.black87),
-            ),
-            SizedBox(height: 16),
+class _WordbookCreateScreenState extends State<WordbookCreateScreen> {
+  final TextEditingController _nameController = TextEditingController();
 
-            // 동사, 유의어
-            RichText(
-              text: TextSpan(
-                style: TextStyle(fontSize: 16, color: Colors.black87),
-                children: [
-                  TextSpan(text: '동사: ', style: TextStyle(fontWeight: FontWeight.bold)),
-                  TextSpan(text: 'reserve, '),
-                  TextSpan(text: '유의어: ', style: TextStyle(fontWeight: FontWeight.bold)),
-                  TextSpan(text: 'book'),
-                ],
+  void _createWordbook() {
+    if (_nameController.text.trim().isNotEmpty) {
+      Navigator.pop(context, _nameController.text.trim());
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('단어장 이름을 입력해주세요.')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Color(0xFFF5F1E8),
+      appBar: AppBar(
+        title: Text(
+          '새 단어장 만들기',
+          style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Colors.brown.shade700),
+        ),
+        backgroundColor: Color(0xFFF5F1E8),
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.close, color: Colors.brown.shade700),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _nameController,
+              decoration: InputDecoration(
+                labelText: '단어장 이름',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
+              autofocus: true,
             ),
-            SizedBox(height: 8),
-
-            // 발음기호
-            RichText(
-              text: TextSpan(
-                style: TextStyle(fontSize: 16, color: Colors.black87),
-                children: [
-                  TextSpan(text: '발음기호: ', style: TextStyle(fontWeight: FontWeight.bold)),
-                  TextSpan(text: '미국식 [ '),
-                  TextSpan(text: 'rézər', style: TextStyle(fontStyle: FontStyle.italic)),
-                  TextSpan(text: ' | '),
-                  TextSpan(text: 'véɪʃn', style: TextStyle(fontStyle: FontStyle.italic)),
-                  TextSpan(text: ' ] 영국식 [ '),
-                  TextSpan(text: 'rézə', style: TextStyle(fontStyle: FontStyle.italic)),
-                  TextSpan(text: ' | '),
-                  TextSpan(text: 'veɪʃn', style: TextStyle(fontStyle: FontStyle.italic)),
-                  TextSpan(text: ' ]'),
-                ],
+            SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _createWordbook,
+                child: Text('완료'),
+                style: ElevatedButton.styleFrom(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                ),
               ),
             ),
           ],
@@ -1391,11 +1623,140 @@ class _VocabularyScreenState extends State<VocabularyScreen> {
       ),
     );
   }
+}
+
+// 단어장 상세 화면 (수정됨)
+class WordbookDetailScreen extends StatefulWidget {
+  final Map<String, dynamic> wordbook;
+
+  const WordbookDetailScreen({Key? key, required this.wordbook}) : super(key: key);
 
   @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
+  _WordbookDetailScreenState createState() => _WordbookDetailScreenState();
+}
+
+class _WordbookDetailScreenState extends State<WordbookDetailScreen> {
+  late List<Map<String, dynamic>> _words; // 단어장 내 단어 목록
+
+  @override
+  void initState() {
+    super.initState();
+    // 부모 위젯으로부터 전달받은 단어 리스트로 초기화
+    _words = List<Map<String, dynamic>>.from(widget.wordbook['words']);
+  }
+
+  // 단어 검색 화면으로 이동하고, 추가할 단어를 받아오는 함수
+  void _navigateAndAddWord() async {
+    final newWord = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => WordSearchScreen()),
+    );
+
+    if (newWord != null && newWord is Map<String, dynamic>) {
+      // 이미 추가된 단어인지 확인
+      if (!_words.any((word) => word['word'] == newWord['word'])) {
+        setState(() {
+          // 'isMemorized' 상태를 추가하여 단어 목록에 저장
+          newWord['isMemorized'] = false;
+          _words.add(newWord);
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('이미 단어장에 있는 단어입니다.')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // WillPopScope를 사용하여 뒤로가기 버튼을 눌렀을 때 수정된 단어 목록을 반환
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.pop(context, _words);
+        return true;
+      },
+      child: Scaffold(
+        backgroundColor: Color(0xFFF5F1E8),
+        appBar: AppBar(
+          title: Text(
+            widget.wordbook['name'],
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.brown.shade700),
+          ),
+          backgroundColor: Color(0xFFF5F1E8),
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back, color: Colors.brown.shade700),
+            onPressed: () => Navigator.pop(context, _words), // 여기도 수정
+          ),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: _words.isEmpty
+              ? Center(child: Text('단어장에 추가된 단어가 없습니다.\n아래 버튼으로 단어를 추가해보세요.'))
+              : ListView.builder(
+            itemCount: _words.length,
+            itemBuilder: (context, index) {
+              final wordData = _words[index];
+              bool isMemorized = wordData['isMemorized'];
+
+              return Card(
+                margin: EdgeInsets.only(bottom: 12),
+                child: ExpansionTile(
+                  title: Text(wordData['word'], style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text((wordData['meanings'] as List<String>).first, overflow: TextOverflow.ellipsis),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // 뜻 전체
+                          ...?(wordData['meanings'] as List<String>?)?.map((m) => Text(m)),
+                          SizedBox(height: 8),
+                          Text(wordData['pronunciation'], style: TextStyle(fontStyle: FontStyle.italic)),
+                          SizedBox(height: 16),
+                          // 암기/미암기 버튼
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              ElevatedButton(
+                                onPressed: () {
+                                  setState(() => wordData['isMemorized'] = false);
+                                },
+                                child: Text('미암기', style: TextStyle(fontSize: 13, color: Colors.black)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: !isMemorized ? Colors.red.shade400 : Colors.grey,
+                                ),
+                              ),
+                              SizedBox(width: 8),
+                              ElevatedButton(
+                                onPressed: () {
+                                  setState(() => wordData['isMemorized'] = true);
+                                },
+                                child: Text('암기', style: TextStyle(fontSize: 13, color: Colors.black)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: isMemorized ? Colors.green.shade400 : Colors.grey,
+                                ),
+                              ),
+                            ],
+                          )
+                        ],
+                      ),
+                    )
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: _navigateAndAddWord,
+          label: Text('단어 추가'),
+          icon: Icon(Icons.add),
+        ),
+      ),
+    );
   }
 }
 
@@ -1727,7 +2088,8 @@ class SituationScreen extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => ConversationScreen(situation: '공항'),
+                          builder: (context) =>
+                              ConversationScreen(situation: '공항'),
                         ),
                       );
                     },
@@ -1741,7 +2103,8 @@ class SituationScreen extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => ConversationScreen(situation: '식당'),
+                          builder: (context) =>
+                              ConversationScreen(situation: '식당'),
                         ),
                       );
                     },
@@ -1755,7 +2118,8 @@ class SituationScreen extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => ConversationScreen(situation: '호텔'),
+                          builder: (context) =>
+                              ConversationScreen(situation: '호텔'),
                         ),
                       );
                     },
@@ -1769,7 +2133,8 @@ class SituationScreen extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => ConversationScreen(situation: '길거리'),
+                          builder: (context) =>
+                              ConversationScreen(situation: '길거리'),
                         ),
                       );
                     },
@@ -1800,44 +2165,35 @@ class SituationScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.lightBlue,
-                borderRadius: BorderRadius.circular(10),
+            // 1. 하늘색 배경(decoration) 제거 및 크기 조정
+            imagePath != null
+                ? Container(
+              width: 100, // 이미지 크기 증가
+              height: 100,
+              child: Image.asset(
+                imagePath,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return Icon(
+                    fallbackIcon ?? Icons.help,
+                    size: 70,
+                    color: Colors.brown.shade700, // 아이콘 색상 변경
+                  );
+                },
               ),
-              child: imagePath != null
-                  ? Container(
-                width: 60,
-                height: 60,
-                child: Image.asset(
-                  imagePath,
-                  width: 60,
-                  height: 60,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) {
-                    // 이미지 로딩 실패 시 기본 아이콘으로 대체
-                    return Icon(
-                      fallbackIcon ?? Icons.help,
-                      size: 32,
-                      color: Colors.white,
-                    );
-                  },
-                ),
-              )
-                  : Icon(
-                fallbackIcon ?? Icons.help,
-                size: 32,
-                color: Colors.white,
-              ),
+            )
+                : Icon(
+              fallbackIcon ?? Icons.help,
+              size: 70, // 아이콘 크기 증가
+              color: Colors.brown.shade700, // 아이콘 색상 변경
             ),
-            SizedBox(height: 10),
+            SizedBox(height: 15), // 간격 조정
             Text(
               situation,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 17, // 폰트 크기 증가
                 fontWeight: FontWeight.bold,
-                color: Colors.black,
+                color: Colors.brown.shade700,
               ),
             ),
           ],
@@ -2047,14 +2403,127 @@ class ConversationScreen extends StatelessWidget {
   }
 }
 
-class CommunityScreen extends StatelessWidget {
-  final List<Map<String, String>> posts = [
-    {'title': '글 제목', 'content': '글 내용'},
-    {'title': '글 제목', 'content': '글 내용'},
-    {'title': '글 제목', 'content': '글 내용'},
-    {'title': '글 제목', 'content': '글 내용'},
-    {'title': '글 제목', 'content': '글 내용'},
+// 커뮤니티 화면 (수정됨)
+class CommunityScreen extends StatefulWidget {
+  @override
+  _CommunityScreenState createState() => _CommunityScreenState();
+}
+
+class _CommunityScreenState extends State<CommunityScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  // 모든 게시글을 저장할 리스트
+  List<Map<String, dynamic>> _allPosts = [];
+
+  final List<String> _tabs = [
+    '자유게시판',
+    '질문게시판',
+    '정보공유',
+    '스터디모집',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _tabs.length, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  // 글 작성 화면으로 이동하고, 결과(새 글)를 받아오는 함수
+  void _navigateAndCreatePost() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => PostWriteScreen()),
+    );
+
+    // PostWriteScreen에서 글 데이터가 넘어왔다면
+    if (result != null && result is Map<String, dynamic>) {
+      setState(() {
+        _allPosts.add(result); // 전체 글 목록에 추가
+      });
+    }
+  }
+
+  // 각 탭에 맞는 게시글 목록을 보여주는 위젯
+  Widget _buildPostList(String category) {
+    // 현재 카테고리에 맞는 글들만 필터링
+    final categoryPosts = _allPosts.where((post) => post['category'] == category).toList();
+
+    if (categoryPosts.isEmpty) {
+      return Center(
+        child: Text(
+          '아직 작성된 글이 없어요.\n첫 번째 글을 작성해보세요!',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 16,
+            color: Colors.grey.shade600,
+            height: 1.5,
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: categoryPosts.length,
+      itemBuilder: (context, index) {
+        final post = categoryPosts[index];
+        // 태그가 리스트 형태이므로 join으로 합쳐서 문자열로 만듦
+        final tags = (post['tags'] as List<String>?)?.join(' ') ?? '';
+
+        return GestureDetector(
+          onTap: () {
+            // 상세 보기 화면으로 이동
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => PostDetailScreen(post: post),
+              ),
+            );
+          },
+          child: Container(
+            margin: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.brown.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  post['title'],
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: 8),
+                if (tags.isNotEmpty)
+                  Text(
+                    tags,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.blue.shade600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2075,102 +2544,32 @@ class CommunityScreen extends StatelessWidget {
           icon: Icon(Icons.arrow_back, color: Colors.brown.shade700),
           onPressed: () => Navigator.pop(context),
         ),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: _tabs.map((String title) => Tab(text: title)).toList(),
+          labelColor: Colors.brown.shade800,
+          unselectedLabelColor: Colors.grey.shade600,
+          indicatorColor: Colors.brown.shade600,
+          indicatorWeight: 3,
+          labelStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+        ),
       ),
-      body: Stack(
-        children: [
-          // 게시글 목록
-          ListView.builder(
-            padding: EdgeInsets.only(bottom: 80), // 글 작성 버튼을 위한 여백
-            itemCount: posts.length,
-            itemBuilder: (context, index) {
-              return Container(
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
-                      color: Colors.grey.shade300,
-                      width: 1,
-                    ),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      posts[index]['title']!,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      posts[index]['content']!,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-
-          // 글 작성 버튼
-          Positioned(
-            bottom: 20,
-            right: 20,
-            child: GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => PostWriteScreen()),
-                );
-              },
-              child: Container(
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade400,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 4,
-                      offset: Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.edit,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                    SizedBox(width: 8),
-                    Text(
-                      '글 작성',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
+      body: TabBarView(
+        controller: _tabController,
+        // 각 탭에 맞는 위젯을 생성
+        children: _tabs.map((category) => _buildPostList(category)).toList(),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _navigateAndCreatePost,
+        label: Text('글 작성'),
+        icon: Icon(Icons.edit),
+        backgroundColor: Colors.orange.shade400,
       ),
     );
   }
 }
 
-// 글 작성 화면
+// 글 작성 화면 (수정됨)
 class PostWriteScreen extends StatefulWidget {
   @override
   _PostWriteScreenState createState() => _PostWriteScreenState();
@@ -2189,6 +2588,39 @@ class _PostWriteScreenState extends State<PostWriteScreen> {
     '정보공유',
     '스터디모집',
   ];
+
+  void _submitPost() {
+    if (_titleController.text.isNotEmpty &&
+        _contentController.text.isNotEmpty &&
+        _selectedCategory != '게시판을 선택해주세요.') {
+
+      // 태그를 # 기준으로 분리하고 공백 제거
+      final tags = _tagController.text
+          .split('#')
+          .where((tag) => tag.trim().isNotEmpty)
+          .map((tag) => '#${tag.trim()}')
+          .toList();
+
+      // 새로운 게시글 데이터를 Map 형태로 생성
+      final newPost = {
+        'category': _selectedCategory,
+        'title': _titleController.text,
+        'content': _contentController.text,
+        'tags': tags, // 리스트 형태로 저장
+      };
+
+      // SnackBar를 표시하고, 결과값(newPost)과 함께 이전 화면으로 돌아감
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('글이 등록되었습니다.')),
+      );
+      Navigator.pop(context, newPost);
+
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('카테고리, 제목, 내용을 모두 입력해주세요.')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2210,30 +2642,15 @@ class _PostWriteScreenState extends State<PostWriteScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          Container(
-            margin: EdgeInsets.only(right: 16, top: 8, bottom: 8),
+          Padding(
+            padding: const EdgeInsets.only(right: 16.0, top: 8, bottom: 8),
             child: ElevatedButton(
-              onPressed: () {
-                if (_titleController.text.isNotEmpty &&
-                    _contentController.text.isNotEmpty &&
-                    _selectedCategory != '게시판을 선택해주세요.') {
-                  // 글 작성 완료 처리
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('글이 등록되었습니다.')),
-                  );
-                  Navigator.pop(context);
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('모든 항목을 입력해주세요.')),
-                  );
-                }
-              },
+              onPressed: _submitPost, // 등록 버튼 클릭 시 _submitPost 함수 호출
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.orange.shade400,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
-                padding: EdgeInsets.symmetric(horizontal: 16),
               ),
               child: Text(
                 '등록',
@@ -2249,171 +2666,110 @@ class _PostWriteScreenState extends State<PostWriteScreen> {
       ),
       body: Padding(
         padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 카테고리 선택 드롭다운
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.brown.shade300),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedCategory,
-                  items: categories.map((String category) {
-                    return DropdownMenuItem<String>(
-                      value: category,
-                      child: Text(
-                        category,
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: category == '게시판을 선택해주세요.'
-                              ? Colors.grey.shade500
-                              : Colors.black87,
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                  onChanged: (String? newValue) {
-                    setState(() {
-                      _selectedCategory = newValue!;
-                    });
-                  },
-                  icon: Icon(Icons.keyboard_arrow_down, color: Colors.grey.shade600),
-                  isExpanded: true,
-                ),
-              ),
-            ),
-
-            SizedBox(height: 16),
-
-            // 제목 입력
-            Text(
-              '제목',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.black87,
-              ),
-            ),
-            SizedBox(height: 8),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.brown.shade300),
-              ),
-              child: TextField(
-                controller: _titleController,
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.all(16),
-                ),
-              ),
-            ),
-
-            SizedBox(height: 16),
-
-            // 내용 입력
-            Text(
-              '내용을 입력하세요.',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.black87,
-              ),
-            ),
-            SizedBox(height: 8),
-            Expanded(
-              child: Container(
+        child: SingleChildScrollView( // 키보드가 올라올 때 화면이 깨지지 않도록
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 카테고리 선택 드롭다운
+              Container(
                 width: double.infinity,
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.brown.shade300),
                 ),
-                child: TextField(
-                  controller: _contentController,
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.all(16),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedCategory,
+                    items: categories.map((String category) {
+                      return DropdownMenuItem<String>(
+                        value: category,
+                        child: Text(
+                          category,
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: category == '게시판을 선택해주세요.'
+                                ? Colors.grey.shade500
+                                : Colors.black87,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (String? newValue) {
+                      setState(() {
+                        _selectedCategory = newValue!;
+                      });
+                    },
+                    icon: Icon(Icons.keyboard_arrow_down, color: Colors.grey.shade600),
+                    isExpanded: true,
                   ),
                 ),
               ),
-            ),
 
-            SizedBox(height: 16),
+              SizedBox(height: 16),
 
-            // 하단 태그 입력 섹션
-            Text(
-              '#태그 입력 (#으로 구분, 최대 10개)',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade600,
+              // 제목 입력
+              TextField(
+                controller: _titleController,
+                decoration: InputDecoration(
+                  hintText: '제목',
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.brown.shade300),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.brown.shade300),
+                  ),
+                ),
               ),
-            ),
-            SizedBox(height: 8),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.brown.shade300),
+
+              SizedBox(height: 16),
+
+              // 내용 입력
+              TextField(
+                controller: _contentController,
+                maxLines: 10,
+                decoration: InputDecoration(
+                  hintText: '내용을 입력하세요.',
+                  filled: true,
+                  fillColor: Colors.white,
+                  alignLabelWithHint: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.brown.shade300),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.brown.shade300),
+                  ),
+                ),
               ),
-              child: TextField(
+
+              SizedBox(height: 16),
+
+              // 태그 입력
+              TextField(
                 controller: _tagController,
                 decoration: InputDecoration(
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.all(16),
-                ),
-              ),
-            ),
-
-            SizedBox(height: 24),
-
-            // 등록 버튼
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  if (_titleController.text.isNotEmpty &&
-                      _contentController.text.isNotEmpty &&
-                      _selectedCategory != '게시판을 선택해주세요.') {
-                    // 글 작성 완료 처리
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('글이 등록되었습니다.')),
-                    );
-                    Navigator.pop(context);
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('모든 항목을 입력해주세요.')),
-                    );
-                  }
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange.shade400,
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
+                  hintText: '#태그입력 #태그2',
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.brown.shade300),
                   ),
-                ),
-                child: Text(
-                  '등록',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.brown.shade300),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2424,6 +2780,194 @@ class _PostWriteScreenState extends State<PostWriteScreen> {
     _titleController.dispose();
     _contentController.dispose();
     _tagController.dispose();
+    super.dispose();
+  }
+}
+
+// --- 게시글 상세 보기 화면 (라벨 추가) ---
+class PostDetailScreen extends StatefulWidget {
+  final Map<String, dynamic> post;
+
+  const PostDetailScreen({Key? key, required this.post}) : super(key: key);
+
+  @override
+  _PostDetailScreenState createState() => _PostDetailScreenState();
+}
+
+class _PostDetailScreenState extends State<PostDetailScreen> {
+  final TextEditingController _commentController = TextEditingController();
+  final List<String> _comments = [];
+
+  void _addComment() {
+    if (_commentController.text.trim().isNotEmpty) {
+      setState(() {
+        _comments.add(_commentController.text.trim());
+        _commentController.clear();
+        FocusScope.of(context).unfocus();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tags = (widget.post['tags'] as List<String>?)?.join(' ') ?? '';
+
+    return Scaffold(
+      backgroundColor: Color(0xFFF5F1E8),
+      appBar: AppBar(
+        title: Text(
+          widget.post['category'],
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Colors.brown.shade700,
+          ),
+        ),
+        backgroundColor: Color(0xFFF5F1E8),
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back, color: Colors.brown.shade700),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: ListView(
+                children: [
+                  SizedBox(height: 20),
+                  // --- '제목' 라벨 추가 ---
+                  Text(
+                    '제목',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    widget.post['title'],
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  if (tags.isNotEmpty)
+                    Text(
+                      tags,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  SizedBox(height: 24),
+                  Divider(color: Colors.brown.shade200, thickness: 1),
+                  SizedBox(height: 24),
+                  // --- '내용' 라벨 추가 ---
+                  Text(
+                    '내용',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    widget.post['content'],
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.black87,
+                      height: 1.6,
+                    ),
+                  ),
+                  SizedBox(height: 30),
+
+                  Divider(color: Colors.brown.shade300, thickness: 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12.0),
+                    child: Text(
+                      '댓글 ${_comments.length}개',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.brown.shade700,
+                      ),
+                    ),
+                  ),
+                  ..._comments.map((comment) => Container(
+                    padding: EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                    margin: EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.comment, size: 18, color: Colors.grey.shade600),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            comment,
+                            style: TextStyle(fontSize: 15, color: Colors.black87),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )),
+                  SizedBox(height: 20),
+                ],
+              ),
+            ),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 5,
+                  offset: Offset(0, -2),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _commentController,
+                      decoration: InputDecoration(
+                        hintText: '댓글을 입력하세요...',
+                        border: InputBorder.none,
+                      ),
+                      onSubmitted: (value) => _addComment(),
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.send, color: Colors.orange.shade600),
+                    onPressed: _addComment,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
     super.dispose();
   }
 }
