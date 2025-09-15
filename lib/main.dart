@@ -1,8 +1,24 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:translator/translator.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_sound/flutter_sound.dart' hide PlayerState;
+import 'package:audioplayers/audioplayers.dart';
+import 'package:learning_app/api_service.dart';
+import 'package:uuid/uuid.dart' show Uuid;
+import 'dart:typed_data';
+import 'pronunciation_analysis_result.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:learning_app/models/user_profile.dart';
+import 'api_service.dart';
+import 'package:learning_app/models/statistics_model.dart';
+
 
 // 1. 데이터 모델 클래스 (수정 없음)
 class WordData {
@@ -178,6 +194,9 @@ class _CharacterAnimationScreenState extends State<CharacterAnimationScreen>
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  await Hive.openBox('userSettings');
+
   await Dictionary.load();
   runApp(MyApp());
 }
@@ -187,6 +206,87 @@ class AppState {
   static String selectedCharacterName = '여우';
   static String selectedLanguage = '영어';
   static final List<WordData> favoriteWords = [];
+
+  static String? userName;
+  static String? userLevel;
+  static String? userEmail;
+  static String? userId;
+  static Map<String, dynamic>? learningGoals;
+
+  static Map<String, dynamic> firstLesson = {}; // 추천 첫 학습
+  static List<String> dailyGoals = []; // 오늘의 목표
+}
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  final ApiService _apiService = ApiService();
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLoginStatus();
+  }
+
+  Future<void> _checkLoginStatus() async {
+    await Future.delayed(const Duration(seconds: 1));
+
+    // 👇 [수정] 자동 로그인 설정을 먼저 확인합니다.
+    final bool shouldAutoLogin = await _apiService.getAutoLoginPreference();
+    print("✅ [앱 시작] 저장된 '자동 로그인' 설정: $shouldAutoLogin");
+
+    if (!shouldAutoLogin) {
+      print("➡️ '자동 로그인'이 꺼져있으므로 초기 화면으로 이동합니다.");
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => InitialScreen()),
+      );
+      return;
+    }
+
+    print("➡️ '자동 로그인'이 켜져있으므로 토큰 검증을 시작합니다.");
+
+    // 자동 로그인이 켜져 있는 경우, 기존의 토큰 검증 로직을 실행합니다.
+    try {
+      final token = await _apiService.getToken();
+
+      if (token == null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => InitialScreen()),
+        );
+        return;
+      }
+
+      await _apiService.getUserProfile();
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+      );
+
+    } catch (e) {
+      await _apiService.logout();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => InitialScreen()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -350,54 +450,136 @@ class SignupScreen extends StatefulWidget {
 }
 
 class _SignupScreenState extends State<SignupScreen> {
-  TextEditingController _emailController = TextEditingController();
-  TextEditingController _passwordController = TextEditingController();
-  TextEditingController _confirmPasswordController = TextEditingController();
-  TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _agreeToTerms = false;
   bool _agreeToPrivacy = false;
   bool _agreeToMarketing = false;
   bool _agreeToAge = false;
+  final ApiService _apiService = ApiService();
+  // 👈 1. 로딩 상태를 관리할 변수 추가
+  bool _isLoading = false;
+
+  // 👈 2. 회원가입 버튼을 눌렀을 때 호출될 함수
+  Future<void> _handleRegister() async {
+    // 키보드 숨기기
+    FocusScope.of(context).unfocus();
+
+    // --- 입력값 검증 ---
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty || _nameController.text.isEmpty) {
+      _showErrorSnackBar('필수 항목(*)을 모두 입력해주세요.');
+      return;
+    }
+    if (_passwordController.text != _confirmPasswordController.text) {
+      _showErrorSnackBar('비밀번호가 일치하지 않습니다.');
+      return;
+    }
+    if (!_agreeToTerms || !_agreeToPrivacy || !_agreeToAge) {
+      _showErrorSnackBar('필수 약관에 동의해주세요.');
+      return;
+    }
+
+    // 로딩 시작
+    setState(() => _isLoading = true);
+
+    try {
+      // API 서비스 호출
+      final response = await _apiService.register(
+        email: _emailController.text,
+        password: _passwordController.text,
+        name: _nameController.text,
+      );
+
+      // 2단계: 프로필 생성 API 호출 (회원가입 시에만 호출되어야 함)
+      if (response['access_token'] != null) {
+        await _apiService.createProfile();
+      }
+
+      if (mounted) {
+        // 👇 [수정] confirmation_required 값에 따라 분기 처리합니다.
+        final bool confirmationRequired = response['confirmation_required'] ?? false;
+
+        if (confirmationRequired) {
+          // 1. 이메일 인증이 필요한 경우
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('가입 확인 이메일이 전송되었습니다. 메일함을 확인해주세요.'),
+              duration: Duration(seconds: 3), // 메시지를 좀 더 길게 표시
+            ),
+          );
+          // 로그인 화면 대신 이전 화면(초기 화면)으로 돌아갑니다.
+          Navigator.pop(context);
+
+        } else {
+          // 2. 이메일 인증이 필요 없는 경우 (기존 로직)
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('회원가입에 성공했습니다! 로그인 페이지로 이동합니다.')),
+          );
+          Future.delayed(const Duration(seconds: 1), () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => LoginScreen()),
+            );
+          });
+        }
+      }
+    } catch (e) {
+      if (e is ApiException) {
+        _showErrorSnackBar(e.message);
+      } else {
+        _showErrorSnackBar('알 수 없는 오류가 발생했습니다.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  // 에러 메시지를 보여주는 헬퍼 함수
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('회원가입'),
+        title: const Text('회원가입'),
         centerTitle: true,
       ),
       body: Padding(
-        padding: EdgeInsets.all(24),
+        padding: const EdgeInsets.all(24),
         child: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildTextField(label: '이메일 *', controller: _emailController, hint: '예) abc@gmail.com'),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               _buildPasswordField(label: '비밀번호 *', controller: _passwordController, isObscured: _obscurePassword,
                   onToggle: () => setState(() => _obscurePassword = !_obscurePassword)),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               _buildPasswordField(label: '비밀번호 확인 *', controller: _confirmPasswordController, isObscured: _obscureConfirmPassword,
                   onToggle: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword)),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               _buildTextField(label: '이름 *', controller: _nameController, hint: '예) 홍길동'),
-              SizedBox(height: 24),
+              const SizedBox(height: 24),
               _buildCheckboxRow('약관 약관에 모두 동의합니다.', _agreeToTerms, (value) => setState(() => _agreeToTerms = value!)),
               _buildCheckboxRow('이용약관 및 정보 동의 자세히보기', _agreeToPrivacy, (value) => setState(() => _agreeToPrivacy = value!)),
               _buildCheckboxRow('개인정보 처리방침 및 수집 동의 자세히보기', _agreeToMarketing, (value) => setState(() => _agreeToMarketing = value!)),
               _buildCheckboxRow('만 14세 이상입니다 방침 동의', _agreeToAge, (value) => setState(() => _agreeToAge = value!)),
-              SizedBox(height: 40),
+              const SizedBox(height: 40),
+              // 👈 3. ElevatedButton 수정: 로딩 상태 표시 및 onPressed 연결
               ElevatedButton(
-                onPressed: () {
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (context) => InitialScreen()),
-                        (route) => false,
-                  );
-                },
-                child: Text('완료'),
+                onPressed: _isLoading ? null : _handleRegister,
+                child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('완료'),
               ),
             ],
           ),
@@ -406,6 +588,7 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
+  // --- (이하 _build... 헬퍼 위젯들은 기존과 동일) ---
   Widget _buildTextField({required String label, required TextEditingController controller, required String hint}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -441,7 +624,7 @@ class _SignupScreenState extends State<SignupScreen> {
   Widget _buildCheckboxRow(String text, bool value, ValueChanged<bool?> onChanged) {
     return Row(
       children: [
-        Checkbox(value: value, onChanged: onChanged), // 스타일은 Theme에서 적용됨
+        Checkbox(value: value, onChanged: onChanged),
         Expanded(child: Text(text, style: TextStyle(fontSize: 14))),
       ],
     );
@@ -464,52 +647,123 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  TextEditingController _emailController = TextEditingController();
-  TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
   bool _obscurePassword = true;
+  final ApiService _apiService = ApiService();
+  // 👈 1. 로딩 상태를 관리할 변수 추가
+  bool _isLoading = false;
+  bool _autoLogin = false;
+
+  // 👈 2. 로그인 버튼을 눌렀을 때 호출될 함수
+  Future<void> _handleLogin() async {
+    FocusScope.of(context).unfocus();
+
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+      _showErrorSnackBar('이메일과 비밀번호를 모두 입력해주세요.');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      await _apiService.saveAutoLoginPreference(_autoLogin);
+
+      // 1단계: 회원가입 API 호출 (이제 토큰을 반환함)
+      final response = await _apiService.login(
+        email: _emailController.text,
+        password: _passwordController.text,
+      );
+
+      if (mounted) {
+        if (response['access_token'] != null) {
+          final String? assessedLevel = response['assessed_level'];
+
+          if (assessedLevel != null && assessedLevel.isNotEmpty) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const HomeScreen()),
+            );
+          } else {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => LevelTestScreen(userId: _emailController.text)),
+            );
+          }
+        } else {
+          _showErrorSnackBar(response['detail'] ?? '로그인에 실패했습니다.');
+        }
+      }
+    } catch (e) {
+      if (e is ApiException) {
+        _showErrorSnackBar(e.message);
+      } else {
+        _showErrorSnackBar('알 수 없는 오류가 발생했습니다.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  // 에러 메시지를 보여주는 헬퍼 함수
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(), // AppBar를 추가하여 뒤로가기 버튼 자동 생성
-      body: Padding(
-        padding: EdgeInsets.all(32),
-        child: Column(
-          children: [
-            Spacer(flex: 1),
-            Text(
-              '로그인',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 60),
-            TextField(
-              controller: _emailController,
-              decoration: InputDecoration(labelText: '이메일'),
-            ),
-            SizedBox(height: 20),
-            TextField(
-              controller: _passwordController,
-              obscureText: _obscurePassword,
-              decoration: InputDecoration(
-                labelText: '비밀번호',
-                suffixIcon: IconButton(
-                  icon: Icon(_obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined),
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+      appBar: AppBar(),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            children: [
+              // 👇 [수정] Spacer를 SizedBox로 변경하여 고정된 공간을 줍니다.
+              const SizedBox(height: 50.0),
+
+              const Text('로그인', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 60),
+              TextField(controller: _emailController, decoration: const InputDecoration(labelText: '이메일')),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                decoration: InputDecoration(
+                  labelText: '비밀번호',
+                  suffixIcon: IconButton(
+                    icon: Icon(_obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                  ),
                 ),
               ),
-            ),
-            SizedBox(height: 40),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => LevelTestScreen()),
-                );
-              },
-              child: Text('로그인'),
-            ),
-            Spacer(flex: 2),
-          ],
+              // 👇 [추가] 자동 로그인 체크박스 UI
+              CheckboxListTile(
+                title: const Text('자동 로그인'),
+                value: _autoLogin,
+                onChanged: (bool? value) {
+                  setState(() {
+                    _autoLogin = value ?? false;
+                  });
+                },
+                controlAffinity: ListTileControlAffinity.leading, // 체크박스를 텍스트 왼쪽에 표시
+                contentPadding: EdgeInsets.zero,
+              ),
+              const SizedBox(height: 20),
+
+              ElevatedButton(
+                onPressed: _isLoading ? null : _handleLogin,
+                child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('로그인'),
+              ),
+              const SizedBox(height: 100.0),
+            ],
+          ),
         ),
       ),
     );
@@ -523,65 +777,464 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-// 레벨 테스트 화면
+class TestQuestion {
+  final String id;
+  final String text;
+  final List<String> options;
+
+  TestQuestion({required this.id, required this.text, required this.options});
+
+  factory TestQuestion.fromJson(Map<String, dynamic> json) {
+    // 서버에서 받은 options(Map)의 value들만 추출하여 List<String>으로 변환합니다.
+    final optionsMap = Map<String, dynamic>.from(json['options'] ?? {});
+    final optionsList = optionsMap.values.map((e) => e.toString()).toList();
+
+    return TestQuestion(
+      id: json['question_id'] ?? '',
+      // 서버 응답에 맞춰 키 이름을 'question'으로 사용합니다.
+      text: json['question'] ?? '질문을 불러올 수 없습니다.',
+      options: optionsList,
+    );
+  }
+}
+
+// 2. API 통신 서비스 클래스
+class LevelTestApiService {
+  // ❗️ 중요: FastAPI 서버가 실행 중인 IP 주소로 변경하세요!
+  // 예: final String _baseUrl = 'http://192.168.0.5:8000';
+  final String _baseUrl = const String.fromEnvironment(
+      'AI_BACKEND_URL',
+      defaultValue: 'http://10.0.2.2:8000'
+  ); // 로컬 테스트용 주소
+
+  // 테스트 시작 API 호출
+  Future<Map<String, dynamic>> startTest(String userId, String language) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/level-test/start'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'user_id': userId, 'language': language}),
+    );
+
+    if (response.statusCode == 200) {
+      // 👇 [디버깅 코드] 서버가 보낸 실제 응답 내용을 확인하기 위해 이 줄을 추가하세요.
+      print('서버 응답: ${utf8.decode(response.bodyBytes)}');
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('레벨 테스트를 시작하지 못했습니다.');
+    }
+  }
+
+  // 답변 제출 API 호출
+  Future<Map<String, dynamic>> submitAnswer(String sessionId, String questionId, String answer) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/level-test/answer'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'session_id': sessionId,
+        'question_id': questionId,
+        'answer': answer,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      throw Exception('답변을 제출하지 못했습니다.');
+    }
+  }
+
+  // 최종 결과 요청 API 호출
+  Future<Map<String, dynamic>> completeAssessment(String userId, String sessionId) async {
+    // 👇 [수정됨] user_id와 session_id를 URL에 직접 포함시킵니다.
+    final url = Uri.parse('$_baseUrl/api/user/complete-assessment?user_id=$userId&session_id=$sessionId');
+
+    // 디버깅을 위해 추가한 print문
+    print('>>> [LevelTestApiService] 서버로 보내는 최종 URL: $url');
+
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      // 👇 [수정됨] body 부분을 삭제하거나 주석 처리합니다.
+      // body: json.encode({ ... }),
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    } else {
+      print('### 평가 완료 오류: ${response.statusCode} - ${response.body}');
+      throw Exception('결과를 불러오지 못했습니다.');
+    }
+  }
+}
+
+// 3. 동적으로 변경된 레벨 테스트 화면
 class LevelTestScreen extends StatefulWidget {
+  final String userId;
+  const LevelTestScreen({Key? key, required this.userId}) : super(key: key);
+
   @override
   _LevelTestScreenState createState() => _LevelTestScreenState();
 }
 
 class _LevelTestScreenState extends State<LevelTestScreen> {
-  String? selectedAnswer;
-  final List<String> options = ['No, he is', 'No, I don\'t', 'Yes, he isn\'t', 'Yes, he is', 'Yes, he do'];
+  final LevelTestApiService _apiService = LevelTestApiService();
+  bool _isLoading = true;
+  String? _sessionId;
+  TestQuestion? _currentQuestion;
+  int _questionNumber = 0;
+  int _totalQuestions = 0;
+  String? _selectedAnswer;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _startTest();
+  }
+
+  Future<void> _startTest() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final response = await _apiService.startTest(widget.userId, AppState.selectedLanguage);
+      print('서버 응답: ${response.toString()}');
+
+      if (response['success'] == true && response['data'] != null) {
+        // 👇 'data'를 한 번만 참조하도록 수정합니다.
+        final responseData = response['data'];
+
+        final sessionId = responseData['session_id'];
+        final currentQuestion = TestQuestion.fromJson(responseData['current_question']);
+        final totalQuestions = int.tryParse(responseData['total_questions'].toString().split('-').first) ?? 15;
+
+        setState(() {
+          _sessionId = sessionId;
+          _currentQuestion = currentQuestion;
+          _questionNumber = 1;
+          _totalQuestions = totalQuestions;
+          _isLoading = false;
+        });
+
+      } else {
+        setState(() {
+          _errorMessage = response['error']?.toString() ?? '알 수 없는 서버 오류가 발생했습니다.';
+          _isLoading = false;
+        });
+      }
+    } catch (e, stackTrace) {
+      print('### _startTest 오류: $e');
+      print('### 스택 트레이스: $stackTrace'); // 더 자세한 오류 확인을 위해 추가
+      setState(() {
+        _errorMessage = '서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _submitAndNext() async {
+    if (_selectedAnswer == null || _sessionId == null || _currentQuestion == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('답을 선택해주세요!')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final response = await _apiService.submitAnswer(
+        _sessionId!,
+        _currentQuestion!.id,
+        _selectedAnswer!,
+      );
+
+      if (response['success'] == true) {
+        final responseData = response['data']; // 👈 data를 한 번만 참조합니다.
+
+        // 👇 'status' 키를 확인하여 테스트 완료 여부를 판단합니다.
+        if (responseData['status'] == 'completed') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => LevelTestResultScreen(
+                userId: widget.userId,
+                sessionId: _sessionId!,
+              ),
+            ),
+          );
+        } else {
+          // 다음 문제 표시
+          setState(() {
+            _currentQuestion = TestQuestion.fromJson(responseData['next_question']);
+            _questionNumber++;
+            _selectedAnswer = null;
+            _isLoading = false;
+          });
+        }
+      } else {
+        setState(() {
+          _errorMessage = response['error'] ?? '답변 처리 중 오류가 발생했습니다.';
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      print("### _submitAndNext 오류: $e");
+      setState(() {
+        _errorMessage = '서버와 통신 중 오류가 발생했습니다.';
+        _isLoading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('레벨 테스트')),
+      appBar: AppBar(title: const Text('레벨 테스트')),
       body: SafeArea(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.topLeft,
-                child: Text('1 / 10', style: TextStyle(fontSize: 16, color: Colors.black54)),
-              ),
-              SizedBox(height: 40),
-              Text('다음 질문에 알맞은\n답을 고르세요', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              SizedBox(height: 40),
-              Text('Is he a teacher?', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              SizedBox(height: 40),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: options.length,
-                  itemBuilder: (context, index) {
-                    return Card( // Card로 감싸서 테마 적용
-                      margin: EdgeInsets.only(bottom: 12),
-                      child: RadioListTile<String>(
-                        title: Text(options[index], style: TextStyle(fontSize: 16)),
-                        value: options[index],
-                        groupValue: selectedAnswer,
-                        onChanged: (value) => setState(() => selectedAnswer = value),
-                        activeColor: Colors.green,
-                      ),
-                    );
-                  },
-                ),
-              ),
-              SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => CharacterSelectionScreen()),
-                  );
-                },
-                child: Text('다음'),
-              ),
-            ],
-          ),
+          padding: const EdgeInsets.all(24),
+          child: _buildContent(),
         ),
       ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_errorMessage != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, color: Colors.red, size: 60),
+            const SizedBox(height: 20),
+            Text('오류 발생', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 10),
+            Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
+          ],
+        ),
+      );
+    }
+    if (_currentQuestion == null) {
+      return const Center(child: Text('문제를 불러오지 못했습니다.'));
+    }
+    return Column(
+      children: [
+        Align(
+          alignment: Alignment.topLeft,
+          child: Text('$_questionNumber / $_totalQuestions',
+              style: const TextStyle(fontSize: 16, color: Colors.black54)),
+        ),
+        const SizedBox(height: 40),
+        Text('다음 질문에 알맞은\n답을 고르세요',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 40),
+        Text(_currentQuestion!.text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 40),
+        Expanded(
+          child: ListView.builder(
+            // 👇 optionsList 대신 다시 options를 사용
+            itemCount: _currentQuestion!.options.length,
+            itemBuilder: (context, index) {
+              final option = _currentQuestion!.options[index];
+              return Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: RadioListTile<String>(
+                  title: Text(option, style: const TextStyle(fontSize: 16)),
+                  value: option,
+                  groupValue: _selectedAnswer,
+                  onChanged: (value) => setState(() => _selectedAnswer = value),
+                  activeColor: Colors.green,
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 20),
+        ElevatedButton(
+          onPressed: _submitAndNext,
+          child: Text(_questionNumber == _totalQuestions ? '결과 보기' : '다음'),
+        ),
+      ],
+    );
+  }
+}
+
+// =======================================================
+// ▼▼▼ [추가] 아래 LevelTestResultScreen 클래스를 새로 추가합니다. ▼▼▼
+// =======================================================
+class LevelTestResultScreen extends StatefulWidget {
+  final String userId;
+  final String sessionId;
+
+  const LevelTestResultScreen({
+    Key? key,
+    required this.userId,
+    required this.sessionId,
+  }) : super(key: key);
+
+  @override
+  _LevelTestResultScreenState createState() => _LevelTestResultScreenState();
+}
+
+class _LevelTestResultScreenState extends State<LevelTestResultScreen> {
+  // 👈 1. ApiService 인스턴스를 가져옵니다.
+  final ApiService _apiService = ApiService();
+  final LevelTestApiService _levelTestApiService = LevelTestApiService(); // 기존 서비스도 유지
+
+  bool _isLoading = true;
+  Map<String, dynamic>? _resultData;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAndSaveResults(); // 👈 2. 결과를 가져오고 저장하는 함수를 호출하도록 변경
+  }
+
+  // 👈 3. 결과를 가져온 후, DB에 저장하는 로직을 통합한 새 함수
+  Future<void> _fetchAndSaveResults() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      // 1. AI_WAWA 서버에서 레벨 테스트 결과 가져오기
+      final response = await _levelTestApiService.completeAssessment(widget.userId, widget.sessionId);
+      print('### 결과 API 응답: ${response.toString()}');
+
+      if (response['success'] == true && response['data'] != null) {
+        final responseData = response['data'];
+        final userProfile = responseData['user_profile'] ?? {};
+        final assessedLevel = userProfile['assessed_level'];
+
+        // 2. BackEnd_WAWA 서버로 결과 전송하여 DB에 저장
+        //    실제 user_id는 Supabase의 UUID를 사용해야 하지만, 현재 구조상 email을 user_id로 사용합니다.
+        if (assessedLevel != null) {
+          // ❗️ 이 부분에 /auth/update-level API를 호출하는 로직이 필요합니다.
+          // ❗️ ApiService에 해당 함수를 추가해야 합니다. (아래 4단계 참고)
+          await _apiService.updateUserLevel(
+            userId: widget.userId, // 로그인 시 사용한 ID (현재는 이메일)
+            assessedLevel: assessedLevel,
+          );
+        }
+
+        setState(() {
+          _resultData = responseData;
+        });
+
+      } else {
+        _handleError(response['error']?.toString() ?? '결과를 불러오는 데 실패했습니다.');
+      }
+    } catch (e) {
+      _handleError('서버에 연결할 수 없습니다: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  // 에러 처리 헬퍼 함수
+  void _handleError(String message) {
+    setState(() {
+      _errorMessage = message;
+      _isLoading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // ... (build 메서드는 기존과 동일)
+    return Scaffold(
+      appBar: AppBar(title: const Text('테스트 결과'), automaticallyImplyLeading: false),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: _buildContent(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_errorMessage != null) {
+      return Center(child: Text(_errorMessage!, style: const TextStyle(color: Colors.red)));
+    }
+    if (_resultData == null) {
+      return const Center(child: Text('결과 데이터가 없습니다.'));
+    }
+
+    final userProfile = _resultData!['user_profile'] ?? {};
+    final level = userProfile['assessed_level'] ?? 'N/A';
+    final strengths = List<String>.from(userProfile['strengths'] ?? []);
+    final weaknesses = List<String>.from(userProfile['areas_to_improve'] ?? []);
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Spacer(flex: 2),
+        const Icon(Icons.emoji_events_outlined, color: Colors.amber, size: 80),
+        const SizedBox(height: 20),
+        Text('테스트 완료!',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        Text('당신의 언어 레벨은...',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 24),
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.green.shade100,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            level,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                fontSize: 48,
+                fontWeight: FontWeight.bold,
+                color: Colors.green.shade800),
+          ),
+        ),
+        const SizedBox(height: 24),
+        if (strengths.isNotEmpty) ...[
+          Text('👍 강점: ${strengths.join(', ')}'),
+          const SizedBox(height: 8),
+        ],
+        if (weaknesses.isNotEmpty) ...[
+          Text('💪 개선점: ${weaknesses.join(', ')}'),
+        ],
+        const Spacer(flex: 3),
+        ElevatedButton(
+          onPressed: () {
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => const HomeScreen()),
+                  (route) => false,
+            );
+          },
+          child: const Text('학습 시작하러 가기'),
+        ),
+        const Spacer(),
+      ],
     );
   }
 }
@@ -689,15 +1342,70 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
+  final ApiService _apiService = ApiService();
   late TabController _communityTabController;
   final List<String> _communityTabs = ['자유게시판', '질문게시판', '정보공유', '스터디모집'];
-  static const List<String> _titles = ['나', '단어장', '학습', '상황별 회화', '커뮤니티'];
+  static const List<String> _titles = ['Learning', '단어장', '학습', '상황별 회화', '커뮤니티'];
+
+  // ▼▼▼ [수정] Future를 직접 관리하여 중복 호출을 방지합니다. ▼▼▼
+  Future<void>? _homeScreenDataFuture;
 
   @override
   void initState() {
     super.initState();
     _communityTabController = TabController(length: _communityTabs.length, vsync: this);
+    // ▼▼▼ [수정] initState에서 Future를 딱 한 번만 실행시킵니다. ▼▼▼
+    _homeScreenDataFuture = _loadHomeScreenData();
   }
+
+  Future<void> _loadHomeScreenData() async {
+    try {
+      final profileData = await _apiService.getUserProfile();
+
+      if (mounted) {
+        // AppState 업데이트는 setState 밖에서 처리
+        AppState.userName = profileData['name'];
+        AppState.userLevel = profileData['assessed_level'];
+        AppState.userEmail = profileData['email'];
+        AppState.userId = profileData['user_id'];
+        AppState.learningGoals = profileData['learning_goals'] as Map<String, dynamic>?;
+
+        // 화면 갱신을 위해 setState 호출
+        setState(() {});
+      }
+    } catch (e) {
+      print("홈 화면 데이터 로딩 실패: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('데이터를 불러오는 데 실패했습니다: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _updateStateWithProfileData(Map<String, dynamic> profileData) {
+    print("✅ [3단계] _updateStateWithProfileData 함수 호출됨!");
+    if (mounted) {
+      print("  ➡️ 변경 전 AppState.learningGoals: ${AppState.learningGoals}");
+      setState(() {
+        AppState.userName = profileData['name'];
+        AppState.userLevel = profileData['assessed_level'];
+        AppState.userEmail = profileData['email'];
+        AppState.userId = profileData['user_id'];
+        AppState.learningGoals = profileData['learning_goals'] as Map<String, dynamic>?;
+      });
+      print("  ➡️ 변경 후 AppState.learningGoals: ${AppState.learningGoals}");
+    }
+  }
+
+  // ▼▼▼ [수정] 새로고침 함수는 Future를 새로 할당하고 setState를 호출합니다. ▼▼▼
+  void refreshHomeScreen() {
+    setState(() {
+      _homeScreenDataFuture = _loadHomeScreenData();
+    });
+  }
+
+  // (didChangeDependencies 함수는 완전히 삭제합니다.)
 
   @override
   void dispose() {
@@ -714,63 +1422,90 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
-    final List<Widget> _pages = <Widget>[
-      HomePageContent(),
-      VocabularyScreen(),
-      StudyScreen(),
-      SituationScreen(),
-      CommunityScreen(tabController: _communityTabController),
-    ];
+    // ▼▼▼ [수정] FutureBuilder를 사용하여 데이터 로딩 상태를 명확하게 관리합니다. ▼▼▼
+    return FutureBuilder(
+      future: _homeScreenDataFuture,
+      builder: (context, snapshot) {
+        // 로딩 중일 때
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
 
-    return Scaffold(
-      appBar: AppBar(
-        leading: _selectedIndex > 0
-            ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => _onItemTapped(0))
-            : IconButton(icon: const Icon(Icons.menu), onPressed: () {}),
-        title: Text(_titles[_selectedIndex]),
-        bottom: _selectedIndex == 4
-            ? TabBar(
-          controller: _communityTabController,
-          tabs: _communityTabs.map((String title) => Tab(text: title)).toList(),
-        )
-            : null,
-        actions: [
-          if (_selectedIndex == 0) ...[
-            IconButton(icon: const Icon(Icons.emoji_events_outlined, color: Colors.amber), onPressed: () {}),
-            const Center(child: Text('0', style: TextStyle(fontSize: 16))),
-            IconButton(icon: const Icon(Icons.star_border, color: Colors.blueAccent), onPressed: () {}),
-            const Center(child: Text('0', style: TextStyle(fontSize: 16))),
-            IconButton(
-              icon: const Icon(Icons.settings, color: Colors.black54),
-              onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (context) => SettingsScreen()));
+        // 에러 발생 시 (네트워크 등)
+        if (snapshot.hasError) {
+          return Scaffold(body: Center(child: Text('오류가 발생했습니다: ${snapshot.error}')));
+        }
+
+        // 로딩 완료 후
+        final List<Widget> _pages = <Widget>[
+          HomePageContent(onNavigate: refreshHomeScreen),
+          VocabularyScreen(),
+          StudyScreen(),
+          SituationScreen(),
+          CommunityScreen(tabController: _communityTabController),
+        ];
+
+        return Scaffold(
+          drawer: MyInfoDrawer(onRefresh: refreshHomeScreen),
+          appBar: AppBar(
+            leading: Builder(
+              builder: (innerContext) {
+                return IconButton(
+                  icon: const Icon(Icons.account_circle_outlined),
+                  tooltip: '내 정보 보기',
+                  onPressed: () {
+                    Scaffold.of(innerContext).openDrawer();
+                  },
+                );
               },
             ),
-            const SizedBox(width: 8),
-          ]
-        ],
-      ),
-      body: IndexedStack(index: _selectedIndex, children: _pages),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: Colors.green,
-        unselectedItemColor: Colors.grey,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: '홈'),
-          BottomNavigationBarItem(icon: Icon(Icons.book_outlined), label: '단어장'),
-          BottomNavigationBarItem(icon: Icon(Icons.school_outlined), label: '학습'),
-          BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_outline), label: '상황별 회화'),
-          BottomNavigationBarItem(icon: Icon(Icons.people_alt_outlined), label: '커뮤니티'),
-        ],
-      ),
+            title: Text(_titles[_selectedIndex]),
+            bottom: _selectedIndex == 4
+                ? TabBar(
+              controller: _communityTabController,
+              tabs: _communityTabs.map((String title) => Tab(text: title)).toList(),
+            )
+                : null,
+            actions: [
+              if (_selectedIndex == 0) ...[
+                IconButton(icon: const Icon(Icons.emoji_events_outlined, color: Colors.amber), onPressed: () {}),
+                const Center(child: Text('0', style: TextStyle(fontSize: 16))),
+                IconButton(icon: const Icon(Icons.star_border, color: Colors.blueAccent), onPressed: () {}),
+                const Center(child: Text('0', style: TextStyle(fontSize: 16))),
+                IconButton(
+                  icon: const Icon(Icons.settings, color: Colors.black54),
+                  onPressed: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => SettingsScreen()));
+                  },
+                ),
+                const SizedBox(width: 8),
+              ]
+            ],
+          ),
+          body: IndexedStack(index: _selectedIndex, children: _pages),
+          bottomNavigationBar: BottomNavigationBar(
+            currentIndex: _selectedIndex,
+            onTap: _onItemTapped,
+            type: BottomNavigationBarType.fixed,
+            selectedItemColor: Colors.green,
+            unselectedItemColor: Colors.grey,
+            items: const [
+              BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: '홈'),
+              BottomNavigationBarItem(icon: Icon(Icons.book_outlined), label: '단어장'),
+              BottomNavigationBarItem(icon: Icon(Icons.school_outlined), label: '학습'),
+              BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_outline), label: '상황별 회화'),
+              BottomNavigationBarItem(icon: Icon(Icons.people_alt_outlined), label: '커뮤니티'),
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
 class HomePageContent extends StatefulWidget {
-  const HomePageContent({super.key});
+  final VoidCallback onNavigate;
+  const HomePageContent({super.key, required this.onNavigate});
 
   @override
   State<HomePageContent> createState() => _HomePageContentState();
@@ -782,7 +1517,8 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Mixin 사용을 위해 반드시 호출
+    super.build(context);
+    print("✅ [5단계] HomePageContent UI 다시 빌드됨! 현재 goals: ${AppState.learningGoals}");
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -801,79 +1537,139 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
     );
   }
 
-  // ▼▼▼ [수정] 이 메서드가 변경되었습니다. ▼▼▼
   Widget _buildProfileSection() {
+    final userName = AppState.userName;
+    final userLevel = AppState.userLevel;
+    final goals = AppState.learningGoals;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            // 1. 캐릭터 이미지와 텍스트를 Column으로 묶음
-            Column(
-              children: [
-                // 캐릭터 이름 표시
-                Text(
-                  AppState.selectedCharacterName,
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                SizedBox(height: 8),
-                // 캐릭터 이미지
-                Image.asset(
-                  AppState.selectedCharacterImage,
-                  width: 100,
-                  height: 100,
-                  errorBuilder: (c, e, s) => const Icon(Icons.image_not_supported, size: 100),
-                ),
-                SizedBox(height: 12),
-                // 2. 현재 학습 언어 텍스트 추가
-                RichText(
-                  text: TextSpan(
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade700,
-                      fontFamily: 'Pretendard', // 앱 기본 폰트 지정
-                    ),
-                    children: <TextSpan>[
-                      TextSpan(text: '학습 언어: '),
-                      TextSpan(
-                        text: AppState.selectedLanguage, // AppState에서 선택된 언어 가져오기
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green, // 테마 색상으로 강조
+            Expanded(
+              flex: 4,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(userName ?? AppState.selectedCharacterName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Image.asset(AppState.selectedCharacterImage, width: 100, height: 100, errorBuilder: (c, e, s) => const Icon(Icons.image_not_supported, size: 100)),
+                  const SizedBox(height: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      RichText(
+                        text: TextSpan(
+                          style: TextStyle(fontSize: 14, color: Colors.grey.shade700, fontFamily: 'Pretendard'),
+                          children: <TextSpan>[
+                            const TextSpan(text: '학습 언어: '),
+                            TextSpan(
+                              text: AppState.selectedLanguage,
+                              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                            ),
+                          ],
                         ),
+                      ),
+                      const SizedBox(height: 4),
+                      if (userLevel != null)
+                        RichText(
+                          text: TextSpan(
+                            style: TextStyle(fontSize: 14, color: Colors.grey.shade700, fontFamily: 'Pretendard'),
+                            children: <TextSpan>[
+                              const TextSpan(text: '레벨: '),
+                              TextSpan(
+                                text: userLevel,
+                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              flex: 6,
+              child: goals != null && goals.isNotEmpty
+                  ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const Text("오늘의 목표", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  if ((goals['conversation_goal'] ?? 0) > 0)
+                    _buildGoalIndicator(
+                      icon: Icons.chat_bubble_outline,
+                      color: Colors.orange,
+                      title: '회화',
+                      progress: 0,
+                      goal: goals['conversation_goal'] ?? 0,
+                      unit: '분',
+                    ),
+
+                  // 👇 [수정] 0보다 클 때만 보이도록 if문 추가
+                  if ((goals['grammar_goal'] ?? 0) > 0)
+                    const SizedBox(height: 12),
+                  if ((goals['grammar_goal'] ?? 0) > 0)
+                    _buildGoalIndicator(
+                      icon: Icons.menu_book_outlined,
+                      color: Colors.blue,
+                      title: '문법',
+                      progress: 0,
+                      goal: goals['grammar_goal'] ?? 0,
+                      unit: '회',
+                    ),
+
+                  // 👇 [수정] 0보다 클 때만 보이도록 if문 추가
+                  if ((goals['pronunciation_goal'] ?? 0) > 0)
+                    const SizedBox(height: 12),
+                  if ((goals['pronunciation_goal'] ?? 0) > 0)
+                    _buildGoalIndicator(
+                      icon: Icons.mic_none,
+                      color: Colors.green,
+                      title: '발음',
+                      progress: 0,
+                      goal: goals['pronunciation_goal'] ?? 0,
+                      unit: '회',
+                    ),
+                ],
+              )
+                  : Center(
+                child: GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const GoalSettingScreen())
+                    ).then((newProfile) {
+                      print("✅ [1단계] GoalSettingScreen에서 newProfile 받음: $newProfile");
+                      // 👇 [수정] 이 부분을 변경합니다.
+                      if (newProfile != null && newProfile is Map<String, dynamic>) {
+                        // 부모 위젯(HomeScreen)의 상태 업데이트 함수를 직접 호출합니다.
+                        // 이렇게 하면 불필요한 API 호출 없이 즉시 UI가 바뀝니다.
+                        final homeScreenState = context.findAncestorStateOfType<_HomeScreenState>();
+                        print("✅ [2단계] HomeScreenState 찾음: ${homeScreenState != null}");
+                        homeScreenState?._updateStateWithProfileData(newProfile);
+                      }
+                      // widget.onNavigate(); // <-- 기존의 불필요한 호출은 삭제합니다.
+                    });
+                  },
+                  child: const Column( // 기존 목표 설정 유도 UI
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.flag_outlined, color: Colors.grey, size: 40),
+                      SizedBox(height: 8),
+                      Text(
+                        '학습 목표를 설정하고\n나만의 계획을 시작해보세요!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey, height: 1.5),
                       ),
                     ],
                   ),
                 ),
-              ],
-            ),
-            // 오른쪽 학습 진행도 부분은 그대로 유지됩니다.
-            Column(
-              children: [
-                SizedBox(
-                  width: 100,
-                  height: 100,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    fit: StackFit.expand,
-                    children: const [
-                      CircularProgressIndicator(value: 0.0, strokeWidth: 8, backgroundColor: Color(0xFFE0E0E0), valueColor: AlwaysStoppedAnimation<Color>(Colors.green)),
-                      Center(child: Text('0%', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text('어휘 학습', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Row(
-                  children: const [
-                    Text('하루 목표: ', style: TextStyle(color: Colors.grey)),
-                    Text('20개', style: TextStyle(fontWeight: FontWeight.bold)),
-                    Icon(Icons.arrow_drop_down, color: Colors.grey)
-                  ],
-                )
-              ],
+              ),
             )
           ],
         ),
@@ -881,10 +1677,14 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
     );
   }
 
-  // 나머지 헬퍼 메서드들은 변경점이 없습니다.
   Widget _buildTodayLearningButton() {
     return ElevatedButton.icon(
-      onPressed: () {},
+      onPressed: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const RecommendedStudyScreen()),
+        );
+      },
       icon: const Icon(Icons.book),
       label: const Text('오늘의 학습', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
       style: ElevatedButton.styleFrom(
@@ -986,21 +1786,18 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('출석 체크', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              Row(
-                children: [
-                  _buildDayCircle('월'),
-                  _buildDayCircle('화', isChecked: true),
-                  _buildDayCircle('수'),
-                  _buildDayCircle('목'),
-                  _buildDayCircle('금'),
-                  _buildDayCircle('토'),
-                  _buildDayCircle('일')
-                ],
-              ),
-              const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16)
+              const Spacer(),
+              _buildDayCircle('월'),
+              _buildDayCircle('화', isChecked: true),
+              _buildDayCircle('수'),
+              _buildDayCircle('목'),
+              _buildDayCircle('금'),
+              _buildDayCircle('토'),
+              _buildDayCircle('일'),
+              const SizedBox(width: 8),
+              const Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16),
             ],
           ),
         ),
@@ -1010,11 +1807,360 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
 
   Widget _buildDayCircle(String day, {bool isChecked = false}) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 4),
-      width: 30,
-      height: 30,
-      decoration: BoxDecoration(color: isChecked ? Colors.lightBlueAccent : Colors.grey.shade200, shape: BoxShape.circle),
-      child: Center(child: isChecked ? const Icon(Icons.check, color: Colors.white, size: 18) : Text(day, style: const TextStyle(color: Colors.grey))),
+      margin: const EdgeInsets.symmetric(horizontal: 2.5),
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        color: isChecked ? Colors.lightBlueAccent : Colors.grey.shade200,
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: isChecked
+            ? const Icon(Icons.check, color: Colors.white, size: 16)
+            : Text(day, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      ),
+    );
+  }
+
+  Widget _buildGoalIndicator({
+    required IconData icon,
+    required Color color,
+    required String title,
+    required int progress,
+    required int goal,
+    required String unit,
+  }) {
+    final double progressPercent = goal > 0 ? progress / goal : 0.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 8),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            const Spacer(),
+            Text(
+              '$progress / $goal $unit',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        LinearProgressIndicator(
+          value: progressPercent,
+          backgroundColor: color.withOpacity(0.2),
+          valueColor: AlwaysStoppedAnimation<Color>(color),
+          borderRadius: BorderRadius.circular(10),
+          minHeight: 8,
+        ),
+      ],
+    );
+  }
+}
+
+class MyInfoDrawer extends StatelessWidget {
+  final VoidCallback onRefresh;
+
+  const MyInfoDrawer({super.key, required this.onRefresh});
+
+  @override
+  Widget build(BuildContext context) {
+    final String characterImage = AppState.selectedCharacterImage;
+    final String? displayName = AppState.userName;
+    final String? displayEmail = AppState.userEmail;
+
+    return Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          UserAccountsDrawerHeader(
+            accountName: Text(displayName ?? AppState.selectedCharacterName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            accountEmail: Text(displayEmail ?? '이메일 정보 없음'),
+            currentAccountPicture: CircleAvatar(
+              backgroundImage: AssetImage(characterImage),
+              backgroundColor: Colors.white,
+            ),
+            decoration: BoxDecoration(color: Colors.green.shade700),
+          ),
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('프로필 관리'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (context) => const ProfileScreen()));
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.bar_chart_outlined),
+            title: const Text('나의 학습 통계'),
+            onTap: () {
+              Navigator.pop(context);
+              // 👇 [수정] StatisticsScreen으로 이동하는 코드를 추가합니다.
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const StatisticsScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.flag_outlined),
+            title: const Text('학습 목표 설정'),
+            onTap: () {
+              final homeScreenState = context.findAncestorStateOfType<_HomeScreenState>();
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const GoalSettingScreen()),
+              ).then((newProfile) {
+                if (newProfile != null && newProfile is Map<String, dynamic>) {
+                  homeScreenState?._updateStateWithProfileData(newProfile);
+                }
+              });
+            },
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text('로그아웃'),
+            onTap: () async {
+              await ApiService().logout();
+              if (context.mounted) {
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => InitialScreen()),
+                      (route) => false,
+                );
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class StatisticsScreen extends StatefulWidget {
+  const StatisticsScreen({super.key});
+
+  @override
+  State<StatisticsScreen> createState() => _StatisticsScreenState();
+}
+
+class _StatisticsScreenState extends State<StatisticsScreen> {
+  final ApiService _apiService = ApiService();
+  late Future<StatisticsResponse> _statisticsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _statisticsFuture = _apiService.getStatistics();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('나의 학습 통계'),
+      ),
+      body: FutureBuilder<StatisticsResponse>(
+        future: _statisticsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text('오류가 발생했습니다: ${snapshot.error}'));
+          }
+          if (!snapshot.hasData) {
+            return const Center(child: Text('데이터가 없습니다.'));
+          }
+
+          final stats = snapshot.data!;
+          return ListView(
+            padding: const EdgeInsets.all(16.0),
+            children: [
+              _buildOverallStatsCard(stats.overallStats),
+              const SizedBox(height: 20),
+              if (stats.progressStats != null)
+                _buildProgressStatsCard(stats.progressStats!),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildOverallStatsCard(OverallStats overall) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('📊 누적 학습량', style: Theme.of(context).textTheme.titleLarge),
+            const Divider(height: 24),
+            ListTile(
+              leading: const Icon(Icons.chat_bubble_outline, color: Colors.orange),
+              title: const Text('총 회화 학습'),
+              trailing: Text('${overall.totalConversationDuration} 분', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.menu_book_outlined, color: Colors.blue),
+              title: const Text('총 문법 연습'),
+              trailing: Text('${overall.totalGrammarCount} 회', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.mic_none, color: Colors.green),
+              title: const Text('총 발음 연습'),
+              trailing: Text('${overall.totalPronunciationCount} 회', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressStatsCard(ProgressStats progress) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('🎯 목표 달성률', style: Theme.of(context).textTheme.titleLarge),
+            const Divider(height: 24),
+            _buildProgressIndicator('회화', progress.conversationProgress, Colors.orange),
+            const SizedBox(height: 16),
+            _buildProgressIndicator('문법', progress.grammarProgress, Colors.blue),
+            const SizedBox(height: 16),
+            _buildProgressIndicator('발음', progress.pronunciationProgress, Colors.green),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressIndicator(String title, double value, Color color) {
+    final percentage = value.clamp(0.0, 100.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+            Text('${percentage.toStringAsFixed(1)} %', style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        LinearProgressIndicator(
+          value: percentage / 100,
+          minHeight: 10,
+          backgroundColor: color.withOpacity(0.2),
+          valueColor: AlwaysStoppedAnimation<Color>(color),
+          borderRadius: BorderRadius.circular(5),
+        ),
+      ],
+    );
+  }
+}
+
+class ProfileScreen extends StatelessWidget {
+  const ProfileScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final String? userName = AppState.userName;
+    final String? userEmail = AppState.userEmail;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('프로필 관리')),
+      body: ListView(
+        padding: const EdgeInsets.all(16.0),
+        children: [
+          _buildProfileHeader(context, name: userName, email: userEmail),
+          const SizedBox(height: 24),
+          _buildInfoCard(),
+          const SizedBox(height: 24),
+          _buildDangerZone(),
+        ],
+      ),
+    );
+  }
+
+  // 👈 3. _buildProfileHeader 위젯이 이름과 이메일을 파라미터로 받도록 수정합니다.
+  Widget _buildProfileHeader(BuildContext context, {String? name, String? email}) {
+    return Column(
+      children: [
+        CircleAvatar(
+          radius: 50,
+          backgroundImage: AssetImage(AppState.selectedCharacterImage),
+          backgroundColor: Colors.grey.shade200,
+        ),
+        const SizedBox(height: 16),
+        Text(
+          // 전달받은 이름이 있으면 표시하고, 없으면 '사용자'로 표시
+          name ?? '사용자',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          // 전달받은 이메일이 있으면 표시하고, 없으면 안내 문구 표시
+          email ?? '이메일 정보 없음',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey.shade600),
+        ),
+      ],
+    );
+  }
+
+  // _buildInfoCard 위젯은 이미 AppState를 사용하고 있으므로 수정할 필요가 없습니다.
+  Widget _buildInfoCard() {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.badge_outlined),
+            title: const Text('나의 레벨'),
+            trailing: Text(AppState.userLevel ?? '테스트 미완료', style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.language),
+            title: const Text('학습 언어'),
+            trailing: Text(AppState.selectedLanguage, style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // _buildDangerZone 위젯은 수정할 필요가 없습니다.
+  Widget _buildDangerZone() {
+    return Card(
+      color: Colors.red.shade50,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          ListTile(
+            leading: Icon(Icons.password, color: Colors.red.shade700),
+            title: Text('비밀번호 변경', style: TextStyle(color: Colors.red.shade700)),
+            onTap: () {
+              // TODO: 비밀번호 변경 로직
+            },
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: Icon(Icons.delete_forever_outlined, color: Colors.red.shade700),
+            title: Text('회원 탈퇴', style: TextStyle(color: Colors.red.shade700)),
+            onTap: () {
+              // TODO: 회원 탈퇴 로직
+            },
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1036,6 +2182,70 @@ class AttendancePage extends StatelessWidget {
             Text('이곳에 달력이나 출석 관련 기능을 구현할 수 있습니다.', style: TextStyle(fontSize: 16, color: Colors.grey)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ▼▼▼ [추가] 오늘의 학습 추천 화면 ▼▼▼
+class RecommendedStudyScreen extends StatelessWidget {
+  const RecommendedStudyScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // AppState에서 추천 학습 데이터 가져오기
+    final firstLesson = AppState.firstLesson;
+    final dailyGoals = AppState.dailyGoals;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('오늘의 추천 학습'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16.0),
+        children: [
+          // 첫 수업 추천 카드
+          if (firstLesson.isNotEmpty) ...[
+            Text('🚀 바로 시작해보세요!', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: ListTile(
+                leading: const Icon(Icons.play_circle_fill, color: Colors.green, size: 40),
+                title: Text(firstLesson['title'] ?? '추천 학습'),
+                subtitle: Text(firstLesson['preview'] ?? '흥미로운 첫 학습을 시작해보세요.'),
+                onTap: () {
+                  // TODO: 실제 학습 콘텐츠 화면으로 연결
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('${firstLesson['title']} 학습을 시작합니다!')),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+
+          // 일일 목표 목록
+          if (dailyGoals.isNotEmpty) ...[
+            Text('🎯 오늘의 목표', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            for (var goal in dailyGoals)
+              Card(
+                margin: const EdgeInsets.only(bottom: 8.0),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                  child: Text("✔️  $goal", style: const TextStyle(fontSize: 16)),
+                ),
+              ),
+          ] else
+          // 추천 데이터가 없을 경우
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32.0),
+                child: Text('추천 학습을 보려면\n먼저 레벨 테스트를 완료해주세요!', textAlign: TextAlign.center),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1944,240 +3154,437 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
   @override
   bool get wantKeepAlive => true;
 
+  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  final FlutterSoundPlayer _player = FlutterSoundPlayer();
+
+  bool _isRecorderReady = false;
+  bool _isPlayerReady = false;
+  String? _audioPath;
+
+  bool _isLoadingClone = false;
+  bool _isLoadingCorrection = false;
+  bool _isLoadingAnalysis = false;
+  bool _isVoiceCloned = false;
+
+  String? _errorMessage;
+  String? _userId = "user_123_test";
+
+  PronunciationAnalysisResult? _analysisResult;
   bool isStarred = false;
   bool isBookmarked = false;
-  String? selectedAnswer;
+
+  @override
+  void initState() {
+    super.initState();
+    _initRecorderAndPlayer();
+  }
+
+  Future<void> _initRecorderAndPlayer() async {
+    final status = await Permission.microphone.request();
+    if (status != PermissionStatus.granted) {
+      setState(() => _errorMessage = '마이크 권한이 필요합니다.');
+      return;
+    }
+    await _recorder.openRecorder();
+    await _player.openPlayer();
+    setState(() {
+      _isRecorderReady = true;
+      _isPlayerReady = true;
+    });
+  }
+
+  @override
+  void dispose() {
+    _recorder.closeRecorder();
+    _player.closePlayer();
+    super.dispose();
+  }
+
+  // 녹음 시작/중지 및 분석/복제 실행
+  Future<void> _toggleRecording() async {
+    if (!_isRecorderReady) return;
+
+    if (_recorder.isRecording) {
+      // 녹음 중지
+      // stopRecorder()가 UI 업데이트를 유발할 수 있으므로, 먼저 호출
+      await _recorder.stopRecorder();
+      // UI를 즉시 '녹음 중지' 상태로 갱신
+      setState(() {});
+
+      if (_audioPath != null) {
+        setState(() {
+          _isLoadingClone = true;
+          _isLoadingAnalysis = true;
+          _errorMessage = null;
+        });
+        await Future.wait([
+          _cloneUserVoice(_audioPath!),
+          _analyzePronunciation(_audioPath!),
+        ]);
+      }
+    } else {
+      // 녹음 시작
+      final tempDir = await getTemporaryDirectory();
+      _audioPath = '${tempDir.path}/user_pronunciation.m4a';
+      setState(() {
+        _isVoiceCloned = false;
+        _analysisResult = null;
+      });
+
+      await _recorder.startRecorder(toFile: _audioPath, codec: Codec.aacMP4);
+      // UI를 즉시 '녹음 중' 상태로 갱신
+      setState(() {});
+    }
+    // 마지막 setState는 삭제되었습니다. 각 분기 안에서 상태를 관리합니다.
+  }
+
+  // 발음 분석 API를 호출하는 새 함수
+  Future<void> _analyzePronunciation(String path) async {
+    try {
+      const String baseUrl = String.fromEnvironment(
+          'AI_BACKEND_URL',
+          defaultValue: 'http://10.0.2.2:8000'
+      );
+      final url = Uri.parse('$baseUrl/api/pronunciation/analyze');
+
+      final file = File(path);
+      final audioBytes = await file.readAsBytes();
+      final base64Audio = base64Encode(audioBytes);
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'audio_base64': base64Audio,
+          'target_text': 'Can I book a flight to LA now?',
+          'user_level': 'B1',
+          'language': 'en',
+        }),
+      ).timeout(const Duration(seconds: 45));
+
+      if (response.statusCode == 200) {
+        final responseBody = json.decode(utf8.decode(response.bodyBytes));
+        if (responseBody['success']) {
+          setState(() {
+            _analysisResult = PronunciationAnalysisResult.fromJson(responseBody);
+          });
+        } else {
+          setState(() => _errorMessage = responseBody['error'] ?? '발음 분석에 실패했습니다.');
+        }
+      } else {
+        setState(() => _errorMessage = '발음 분석 실패 (서버 오류: ${response.statusCode})');
+      }
+    } catch (e) {
+      setState(() => _errorMessage = '발음 분석 중 오류 발생: $e');
+    } finally {
+      setState(() => _isLoadingAnalysis = false);
+    }
+  }
+
+  // 음성 복제 함수
+  Future<void> _cloneUserVoice(String path) async {
+    try {
+      const String baseUrl = String.fromEnvironment(
+          'AI_BACKEND_URL',
+          defaultValue: 'http://10.0.2.2:8000'
+      );
+      final url = Uri.parse('$baseUrl/api/voice/clone');
+
+      final file = File(path);
+      final audioBytes = await file.readAsBytes();
+      final base64Audio = base64Encode(audioBytes);
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'user_id': _userId,
+          'voice_sample_base64': base64Audio,
+        }),
+      ).timeout(const Duration(seconds: 45));
+
+      if (response.statusCode == 200) {
+        final responseBody = json.decode(utf8.decode(response.bodyBytes));
+        if (responseBody['success']) {
+          setState(() => _isVoiceCloned = true);
+        } else {
+          setState(() => _errorMessage = responseBody['error'] ?? '음성 복제에 실패했습니다.');
+        }
+      } else {
+        setState(() => _errorMessage = '음성 복제 실패 (서버 오류: ${response.statusCode})');
+      }
+    } catch (e) {
+      setState(() => _errorMessage = '음성 복제 중 오류 발생: $e');
+    } finally {
+      setState(() => _isLoadingClone = false);
+    }
+  }
+
+  // 교정된 발음 듣기 함수
+  Future<void> _getAndPlayCorrection() async {
+    if (_audioPath == null || !_isVoiceCloned) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('먼저 발음을 녹음하고 음성을 등록해주세요.')),
+      );
+      return;
+    }
+    if (!_isPlayerReady || _player.isPlaying) return;
+
+    setState(() {
+      _isLoadingCorrection = true;
+      _errorMessage = null;
+    });
+
+    try {
+      const String baseUrl = String.fromEnvironment(
+          'AI_BACKEND_URL',
+          defaultValue: 'http://10.0.2.2:8000'
+      );
+      final url = Uri.parse('$baseUrl/api/pronunciation/personalized-correction');
+
+      final file = File(_audioPath!);
+      final audioBytes = await file.readAsBytes();
+      final base64Audio = base64Encode(audioBytes);
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'user_id': _userId,
+          'target_text': 'Can I book a flight to LA now?',
+          'user_audio_base64': base64Audio,
+          'user_level': 'B1',
+          'language': 'en',
+        }),
+      ).timeout(const Duration(seconds: 45));
+
+      if (response.statusCode == 200) {
+        final responseBody = json.decode(utf8.decode(response.bodyBytes));
+        if (responseBody['success']) {
+          final correctedAudioBase64 = responseBody['data']['corrected_audio_base64'];
+          await _playAudioFromBase64(correctedAudioBase64);
+        } else {
+          setState(() => _errorMessage = responseBody['error'] ?? '교정된 발음 생성에 실패했습니다.');
+        }
+      } else {
+        setState(() => _errorMessage = '발음 교정 실패 (서버 오류: ${response.statusCode})');
+      }
+    } catch (e) {
+      setState(() => _errorMessage = '발음 교정 중 오류 발생: $e');
+    } finally {
+      setState(() => _isLoadingCorrection = false);
+    }
+  }
+
+  // Base64 오디오 재생 함수
+  Future<void> _playAudioFromBase64(String base64String) async {
+    try {
+      Uint8List audioBytes = base64Decode(base64String);
+      await _player.startPlayer(
+        fromDataBuffer: audioBytes,
+        codec: Codec.mp3,
+        whenFinished: () => setState(() {}),
+      );
+    } catch (e) {
+      setState(() => _errorMessage = "재생 중 오류 발생: $e");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Mixin 사용을 위해 반드시 호출
+    super.build(context);
 
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Color(0xFFF3F4F8),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.black),
-            ),
-            child: Column(
-              children: [
-                Text(
-                  'Can I book a flight\nto LA now?',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
-                  ),
-                ),
-                SizedBox(height: 12),
-                Icon(
-                  Icons.volume_up,
-                  size: 24,
-                  color: Colors.grey.shade700,
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('내 발음 녹음을 선택했습니다.')),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: Text(
-                    '내 발음 녹음',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('조회해서 듣기를 선택했습니다.')),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: Text(
-                    '조회해서 듣기',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              GestureDetector(
-                onTap: () {
-                  setState(() {
-                    isStarred = !isStarred;
-                  });
-                },
-                child: Icon(
-                  isStarred ? Icons.star : Icons.star_border,
-                  color: isStarred ? Colors.orange : Colors.grey,
-                ),
-              ),
-              SizedBox(width: 4),
-              GestureDetector(
-                onTap: () {
-                  setState(() {
-                    isBookmarked = !isBookmarked;
-                  });
-                },
-                child: Icon(
-                  isBookmarked ? Icons.bookmark : Icons.bookmark_border,
-                  color: isBookmarked ? Colors.orange : Colors.grey,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 24),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              '뜻 맞추기',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.black,
-              ),
-            ),
-          ),
-          SizedBox(height: 16),
-          Expanded(
-            child: ListView(
-              children: [
-                _buildAnswerOption('지금 LA로 가는 항공편 예약할 수 있나요'),
-                _buildAnswerOption('나는 LA에서 비행기를 탈 수 있어요'),
-                _buildAnswerOption('나는 지금 LA에 도착했어요'),
-                _buildAnswerOption('나는 LA로 가는 항공편을 예약했어요'),
-                _buildAnswerOption('지금 LA행 비행기가 출발했어요'),
-              ],
-            ),
-          ),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('다음 문제로 이동합니다.')),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                padding: EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: Text(
-                '다음',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+    final isRecording = _recorder.isRecording;
+    final bool isBusy = _isLoadingClone || _isLoadingCorrection || _isLoadingAnalysis;
 
-  Widget _buildAnswerOption(String text) {
-    bool isSelected = selectedAnswer == text;
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          selectedAnswer = text;
-        });
-      },
-      child: Container(
-        width: double.infinity,
-        margin: EdgeInsets.only(bottom: 8),
-        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.green : Color(0xFFF3F4F8),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isSelected ? Colors.black : Colors.brown.shade300,
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Row(
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
           children: [
             Container(
-              width: 20,
-              height: 20,
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: isSelected ? Colors.black : Colors.transparent,
-                border: Border.all(
-                  color: isSelected ? Colors.black : Colors.grey.shade500,
-                  width: 2,
-                ),
+                color: const Color(0xFFF3F4F8),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.black),
               ),
-              child: isSelected
-                  ? Icon(
-                Icons.check,
-                size: 14,
-                color: Colors.white,
-              )
-                  : null,
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                text,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: isSelected ? Colors.white : Colors.black87,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                ),
+              child: Column(
+                children: [
+                  const Text(
+                    'Can I book a flight\nto LA now?',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black),
+                  ),
+                  const SizedBox(height: 12),
+                  Icon(Icons.volume_up, size: 24, color: Colors.grey.shade700),
+                ],
               ),
             ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: isBusy ? null : _toggleRecording,
+                    icon: Icon(isRecording ? Icons.stop : Icons.mic),
+                    label: Text(
+                      isRecording ? '녹음 중지' : '내 발음 녹음',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isRecording ? Colors.redAccent : Colors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: isBusy || isRecording ? null : _getAndPlayCorrection, // 녹음 중일 때도 비활성화
+                    child: const Text('교정 발음 듣기', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (_isLoadingAnalysis || _isLoadingClone)
+              const Padding(
+                padding: EdgeInsets.all(8.0),
+                child: Column(children: [CircularProgressIndicator(), SizedBox(height: 8), Text("음성 분석 및 등록 중...")]),
+              ),
+            if (_isLoadingCorrection)
+              const Padding(
+                padding: EdgeInsets.all(8.0),
+                child: Column(children: [CircularProgressIndicator(), SizedBox(height: 8), Text("교정된 발음 생성 중...")]),
+              ),
+            if (_errorMessage != null && !isBusy && !isRecording)
+              Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                GestureDetector(
+                  onTap: () => setState(() => isStarred = !isStarred),
+                  child: Icon(
+                    isStarred ? Icons.star : Icons.star_border,
+                    color: isStarred ? Colors.orange : Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                GestureDetector(
+                  onTap: () => setState(() => isBookmarked = !isBookmarked),
+                  child: Icon(
+                    isBookmarked ? Icons.bookmark : Icons.bookmark_border,
+                    color: isBookmarked ? Colors.orange : Colors.grey,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+
+            if (_analysisResult != null && !_isLoadingAnalysis)
+              _buildAnalysisResultCard(_analysisResult!),
+
           ],
         ),
       ),
     );
   }
+
+  Widget _buildAnalysisResultCard(PronunciationAnalysisResult result) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("📊 발음 분석 결과", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Divider(height: 24),
+            Center(
+              child: _buildScoreIndicator("종합 점수", result.overallScore, Colors.blue),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildScoreIndicator("음높이", result.pitchScore, Colors.orange),
+                _buildScoreIndicator("리듬", result.rhythmScore, Colors.green),
+                _buildScoreIndicator("강세", result.stressScore, Colors.red),
+              ],
+            ),
+            const SizedBox(height: 24),
+            _buildFeedbackSection("상세 피드백", Icons.comment, result.detailedFeedback),
+            const SizedBox(height: 16),
+            _buildFeedbackSection("개선 제안", Icons.lightbulb, result.suggestions),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScoreIndicator(String title, double score, Color color) {
+    return Column(
+      children: [
+        SizedBox(
+          width: 80,
+          height: 80,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CircularProgressIndicator(
+                value: score / 100.0,
+                strokeWidth: 8,
+                backgroundColor: color.withOpacity(0.2),
+                valueColor: AlwaysStoppedAnimation<Color>(color),
+              ),
+              Center(
+                child: Text(
+                  score.toStringAsFixed(0),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+      ],
+    );
+  }
+
+  Widget _buildFeedbackSection(String title, IconData icon, List<String> items) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: Colors.grey.shade700, size: 20),
+            const SizedBox(width: 8),
+            Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ...items.map((item) => Padding(
+          padding: const EdgeInsets.only(left: 28, bottom: 4),
+          child: Text("• $item", style: const TextStyle(fontSize: 14)),
+        )).toList(),
+      ],
+    );
+  }
 }
+
 
 class SituationScreen extends StatefulWidget {
   const SituationScreen({super.key});
@@ -2190,87 +3597,78 @@ class _SituationScreenState extends State<SituationScreen> with AutomaticKeepAli
   @override
   bool get wantKeepAlive => true;
 
+  // ▼▼▼ [수정] 1. API 키와 UI 데이터를 관리하기 위한 Map들을 정의합니다. ▼▼▼
+  // 서버로 보낼 API 키 (영어)
+  final Map<String, String> _situationApiKeys = {
+    '공항': 'airport',
+    '식당': 'restaurant',
+    '호텔': 'hotel',
+    '길거리': 'street',
+  };
+
+  // 화면에 표시될 이미지 경로
+  final Map<String, String> _situationImagePaths = {
+    '공항': 'assets/airport.png',
+    '식당': 'assets/restaurant.png',
+    '호텔': 'assets/hotel.png',
+    '길거리': 'assets/road.png',
+  };
+
+  // 이미지가 없을 경우를 대비한 대체 아이콘
+  final Map<String, IconData> _situationFallbackIcons = {
+    '공항': Icons.flight_takeoff,
+    '식당': Icons.restaurant_menu_outlined,
+    '호텔': Icons.hotel_outlined,
+    '길거리': Icons.signpost_outlined,
+  };
+
+
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Mixin 사용을 위해 반드시 호출
+    super.build(context);
     return Padding(
-      padding: EdgeInsets.all(20),
+      padding: const EdgeInsets.all(20),
       child: Column(
         children: [
-          SizedBox(height: 20),
-          Text(
+          const SizedBox(height: 20),
+          const Text(
             '공부하고 싶은 상황을\n선택해주세요',
             textAlign: TextAlign.center,
-            // ▼▼▼ [수정] 글자 스타일을 앱 테마에 맞게 조정 ▼▼▼
             style: TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.bold,
             ),
           ),
-          SizedBox(height: 40),
+          const SizedBox(height: 40),
           Expanded(
             child: GridView.count(
               crossAxisCount: 2,
               crossAxisSpacing: 16,
               mainAxisSpacing: 16,
-              children: [
-                _buildSituationButton(
+              // ▼▼▼ [수정] 2. Map 데이터를 기반으로 버튼 목록을 동적으로 생성합니다. ▼▼▼
+              children: _situationApiKeys.keys.map((String situationName) {
+                // '공항', '식당' ...
+                final String apiKey = _situationApiKeys[situationName]!;
+                final String imagePath = _situationImagePaths[situationName]!;
+                final IconData fallbackIcon = _situationFallbackIcons[situationName]!;
+
+                return _buildSituationButton(
                   context,
-                  situation: '공항',
-                  imagePath: 'assets/airport.png',
-                  fallbackIcon: Icons.flight_takeoff,
+                  situation: situationName, // UI에 표시될 이름 (예: '공항')
+                  imagePath: imagePath,
+                  fallbackIcon: fallbackIcon,
                   onTap: () {
+                    print('선택: $situationName, API Key: $apiKey'); // 디버깅 로그
+                    // ▼▼▼ [수정] 3. ConversationScreen으로 이동할 때 한글 이름이 아닌 '영어 API 키'를 전달합니다. ▼▼▼
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => ConversationScreen(situation: '공항'),
+                        builder: (context) => ConversationScreen(situation: apiKey),
                       ),
                     );
                   },
-                ),
-                _buildSituationButton(
-                  context,
-                  situation: '식당',
-                  imagePath: 'assets/restaurant.png',
-                  fallbackIcon: Icons.restaurant_menu_outlined,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ConversationScreen(situation: '식당'),
-                      ),
-                    );
-                  },
-                ),
-                _buildSituationButton(
-                  context,
-                  situation: '호텔',
-                  imagePath: 'assets/hotel.png',
-                  fallbackIcon: Icons.hotel_outlined,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ConversationScreen(situation: '호텔'),
-                      ),
-                    );
-                  },
-                ),
-                _buildSituationButton(
-                  context,
-                  situation: '길거리',
-                  imagePath: 'assets/road.png',
-                  fallbackIcon: Icons.signpost_outlined,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ConversationScreen(situation: '길거리'),
-                      ),
-                    );
-                  },
-                ),
-              ],
+                );
+              }).toList(),
             ),
           ),
         ],
@@ -2278,48 +3676,46 @@ class _SituationScreenState extends State<SituationScreen> with AutomaticKeepAli
     );
   }
 
-  // ▼▼▼ [수정] 버튼 위젯 전체를 Card와 InkWell을 사용하여 개선 ▼▼▼
+  // _buildSituationButton 위젯은 기존 코드와 동일하게 재사용합니다.
   Widget _buildSituationButton(BuildContext context, {
     required String situation,
     String? imagePath,
     IconData? fallbackIcon,
     required VoidCallback onTap,
   }) {
-    // Card 위젯을 사용하여 앱의 다른 카드들과 디자인 통일
     return Card(
-      clipBehavior: Clip.antiAlias, // InkWell 효과가 카드 모양에 맞게 적용됨
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            imagePath != null
-                ? Image.asset(
-              imagePath,
-              width: 80, // 이미지 크기 조정
-              height: 80,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) {
-                return Icon(
-                  fallbackIcon ?? Icons.help_outline,
-                  size: 60,
-                  // 아이콘 색상을 테마 색상으로 변경
-                  color: Colors.green,
-                );
-              },
-            )
-                : Icon(
-              fallbackIcon ?? Icons.help_outline,
-              size: 60,
-              color: Colors.green,
-            ),
-            SizedBox(height: 12),
+            if (imagePath != null)
+              Image.asset(
+                imagePath,
+                width: 80,
+                height: 80,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return Icon(
+                    fallbackIcon ?? Icons.help_outline,
+                    size: 60,
+                    color: Colors.green,
+                  );
+                },
+              )
+            else
+              Icon(
+                fallbackIcon ?? Icons.help_outline,
+                size: 60,
+                color: Colors.green,
+              ),
+            const SizedBox(height: 12),
             Text(
               situation,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.bold,
-                // 텍스트 색상을 검은색 계열로 변경
                 color: Colors.black87,
               ),
             ),
@@ -2330,163 +3726,533 @@ class _SituationScreenState extends State<SituationScreen> with AutomaticKeepAli
   }
 }
 
-// 회화 학습 화면 (세 번째 이미지)
-class ConversationScreen extends StatelessWidget {
+class ChatMessage {
+  String conversationText;
+  final String? educationalText;
+  final bool isUser;
+  bool isExpanded;
+
+  ChatMessage({
+    required this.conversationText,
+    this.educationalText,
+    this.isUser = false,
+    this.isExpanded = false,
+  });
+}
+
+class ConversationScreen extends StatefulWidget {
   final String situation;
 
-  ConversationScreen({required this.situation});
+  const ConversationScreen({super.key, required this.situation});
 
-  // 대화 내용을 담을 샘플 데이터
-  final List<Map<String, dynamic>> conversationData = [
-    {'isQuestion': true, 'text': '실례합니다, 체크인 카운터는 어디에 있나요?'},
-    {'isQuestion': false, 'text': '저쪽입니다. 입구 바로 옆에 있어요.'},
-    {'isQuestion': true, 'text': '감사합니다. 그리고 제 짐을 부치고 싶어요.'},
-    {'isQuestion': false, 'text': '네, 여권과 항공권을 보여주시겠어요?'},
-    {'isQuestion': true, 'text': '여기 있습니다.'},
-  ];
+  @override
+  _ConversationScreenState createState() => _ConversationScreenState();
+}
+
+class _ConversationScreenState extends State<ConversationScreen> {
+  final TextEditingController _textController = TextEditingController();
+  final String _baseUrl = const String.fromEnvironment(
+      'AI_BACKEND_URL',
+      defaultValue: 'http://10.0.2.2:8000'
+  );
+  String? _sessionId;
+  bool _isLoading = true;
+  String _loadingMessage = 'AI와 연결하는 중...';
+
+  // 👈 2. 대화 데이터 리스트의 타입을 Map에서 ChatMessage 클래스로 변경
+  final List<ChatMessage> _messages = [];
+
+  FlutterSoundRecorder? _recorder;
+  final AudioPlayer _player = AudioPlayer(playerId: 'conversation_player');
+  bool _isRecording = false;
+  String? _recordingPath;
+  final FlutterTts _flutterTts = FlutterTts();
+
+  StreamSubscription? _playerStateSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialize();
+    _playerStateSubscription = _player.onPlayerStateChanged.listen((PlayerState state) {
+      print('[AudioPlayer][Conversation] 상태 변경: $state');
+    });
+    _player.onLog.listen((String log) {
+      print('[AudioPlayer][Conversation] 상세 로그: $log');
+    }, onError: (Object e) {
+      print('[AudioPlayer][Conversation] 로그 에러: $e');
+    });
+  }
+
+  Future<void> _initialize() async {
+    final micStatus = await Permission.microphone.request();
+    if (micStatus != PermissionStatus.granted) {
+      setState(() {
+        _isLoading = false;
+        _loadingMessage = '마이크 권한이 필요합니다.';
+      });
+      return;
+    }
+    _recorder = FlutterSoundRecorder();
+    await _recorder!.openRecorder();
+    _startNewConversation();
+  }
+
+  @override
+  void dispose() {
+    _recorder?.closeRecorder();
+    _recorder = null;
+
+    // 👇 3단계: dispose가 호출될 때 리스너를 취소(cancel)합니다.
+    _playerStateSubscription?.cancel();
+    _player.dispose();
+
+    _textController.dispose();
+    _flutterTts.stop();
+    super.dispose();
+  }
+
+  Future<void> _speak(String text) async {
+    await _flutterTts.stop();
+    await _flutterTts.setLanguage("en-US");
+    await _flutterTts.setSpeechRate(0.5);
+    await _flutterTts.setVolume(1.0);
+    await _flutterTts.speak(text);
+  }
+
+  // 👈 3. AI 응답 텍스트를 파싱하여 _messages 리스트에 추가하는 헬퍼 함수
+  void _addAiResponseMessage(String fullResponseText) {
+    const separator = '\n\n======== Recommended ========\n\n';
+    final parts = fullResponseText.split(separator);
+    final conversationText = parts[0].trim();
+    final educationalText = parts.length > 1 ? parts[1].trim() : null;
+
+    setState(() {
+      _messages.add(ChatMessage(
+        conversationText: conversationText,
+        educationalText: educationalText,
+        isUser: false,
+      ));
+    });
+  }
+
+  Future<void> _startNewConversation() async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/api/conversation/start'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'user_id': 'flutter_user_01',
+          'situation': widget.situation,
+          'difficulty': 'beginner',
+          // 👇 [수정] 'en'을 AppState.selectedLanguage로 변경합니다.
+          'language': AppState.selectedLanguage == '영어' ? 'en' :
+          AppState.selectedLanguage == '일본어' ? 'ja' :
+          AppState.selectedLanguage == '중국어' ? 'zh' :
+          AppState.selectedLanguage == '불어' ? 'fr' : 'en',
+          'mode': 'auto',
+        }),
+      );
+      if (response.statusCode == 200) {
+        final body = jsonDecode(utf8.decode(response.bodyBytes));
+        if (body['success']) {
+          final data = body['data'];
+          _sessionId = data['session_id'];
+          _addAiResponseMessage(data['ai_message']); // 👈 헬퍼 함수 사용
+        } else {
+          _handleError(body['error'] ?? '대화 시작에 실패했습니다.');
+        }
+      } else {
+        _handleError('서버에 연결할 수 없습니다. (코드: ${response.statusCode})');
+      }
+    } catch (e) {
+      _handleError('네트워크 오류가 발생했습니다: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _sendVoiceMessage(String path) async {
+    if (_sessionId == null) return;
+
+    final userMessage = ChatMessage(
+        conversationText: '🎤 (음성 메시지를 보냈습니다)', isUser: true);
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = '음성을 분석하는 중...';
+      _messages.add(userMessage);
+    });
+
+    try {
+      final audioBytes = await File(path).readAsBytes();
+      final audioBase64 = base64Encode(audioBytes);
+      final response = await http.post(
+        Uri.parse('$_baseUrl/api/conversation/voice'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'session_id': _sessionId,
+          'audio_base64': audioBase64,
+          // 👇 [수정] 'en'을 AppState.selectedLanguage로 변경합니다.
+          'language': AppState.selectedLanguage == '영어' ? 'en' :
+          AppState.selectedLanguage == '일본어' ? 'ja' :
+          AppState.selectedLanguage == '중국어' ? 'zh' :
+          AppState.selectedLanguage == '불어' ? 'fr' : 'en',
+        }),
+      );
+      if (response.statusCode == 200) {
+        final body = jsonDecode(utf8.decode(response.bodyBytes));
+        if (body['success']) {
+          final data = body['data'];
+          setState(() {
+            userMessage.conversationText = '🗣️ "${data['recognized_text']}"';
+          });
+          _addAiResponseMessage(data['ai_message']);
+
+          // ▼▼▼ [수정된 부분] ▼▼▼
+          // AI가 보낸 전체 메시지에서 실제 대화 부분만 추출합니다.
+          final conversationText = (data['ai_message'] as String).split('\n\n======== Recommended ========')[0].trim();
+          // 추출한 텍스트를 앱에서 직접 음성으로 재생합니다.
+          _speak(conversationText);
+          // ▲▲▲ [수정된 부분] ▲▲▲
+
+        } else {
+          setState(() =>
+          userMessage.conversationText = '⚠️ 전송 실패: ${body['error']}');
+          _handleError(body['error'] ?? '음성 처리에 실패했습니다.');
+        }
+      } else {
+        setState(() =>
+        userMessage.conversationText = '⚠️ 서버 오류 (코드: ${response.statusCode})');
+        _handleError('서버 응답 오류가 발생했습니다.');
+      }
+    } catch (e) {
+      setState(() => userMessage.conversationText = '⚠️ 네트워크 오류');
+      _handleError('음성 전송 중 오류 발생: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _sendTextMessage() async {
+    if (_textController.text.isEmpty || _sessionId == null) return;
+    final userMessageText = _textController.text;
+    _textController.clear();
+
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = 'AI가 답변을 생각하는 중...';
+      _messages.add(
+          ChatMessage(conversationText: '🗣️ "$userMessageText"', isUser: true));
+    });
+
+    try {
+      final response = await http.post(
+          Uri.parse('$_baseUrl/api/conversation/text'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'session_id': _sessionId!,
+            'message': userMessageText,
+            // 👇 [수정] 'en'을 AppState.selectedLanguage로 변경합니다.
+            'language': AppState.selectedLanguage == '영어' ? 'en' :
+            AppState.selectedLanguage == '일본어' ? 'ja' :
+            AppState.selectedLanguage == '중국어' ? 'zh' :
+            AppState.selectedLanguage == '불어' ? 'fr' : 'en',
+          })
+      );
+      if (response.statusCode == 200) {
+        final responseBody = json.decode(utf8.decode(response.bodyBytes));
+        if (responseBody['success']) {
+          final data = responseBody['data'];
+          _addAiResponseMessage(data['ai_message']);
+
+          // ▼▼▼ [수정된 부분] ▼▼▼
+          // AI가 보낸 전체 메시지에서 실제 대화 부분만 추출합니다.
+          final conversationText = (data['ai_message'] as String).split('\n\n======== Recommended ========')[0].trim();
+          // 추출한 텍스트를 앱에서 직접 음성으로 재생합니다.
+          _speak(conversationText);
+          // ▲▲▲ [수정된 부분] ▲▲▲
+
+        } else {
+          _handleError(responseBody['error'] ?? '메시지 처리에 실패했습니다.');
+        }
+      } else {
+        _handleError('서버 오류: ${response.statusCode}');
+      }
+    } catch (e) {
+      _handleError('메시지 전송 중 오류 발생: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _startRecording() async {
+    Directory tempDir = await getTemporaryDirectory();
+    _recordingPath = '${tempDir.path}/flutter_sound.m4a';
+    await _recorder!.startRecorder(toFile: _recordingPath, codec: Codec.aacMP4);
+    setState(() => _isRecording = true);
+  }
+
+  Future<void> _stopRecording() async {
+    await _recorder!.stopRecorder();
+    setState(() => _isRecording = false);
+    if (_recordingPath != null) {
+      _sendVoiceMessage(_recordingPath!);
+    }
+  }
+
+  void _handleError(String message) {
+    setState(() {
+      _isLoading = false;
+      _loadingMessage = message;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    String characterImage = AppState.selectedCharacterImage ?? 'assets/fox.png';
+    String characterImage = 'assets/fox.png';
 
-    // ▼▼▼ [수정] 배경색을 앱 테마와 통일 ▼▼▼
     return Scaffold(
-      backgroundColor: Color(0xFFF3F4F8),
+      backgroundColor: const Color(0xFFF3F4F8),
       appBar: AppBar(
-        title: Text('회화 학습'),
-        // ▼▼▼ [수정] AppBar 배경색도 통일 ▼▼▼
-        backgroundColor: Color(0xFFF3F4F8),
+        title: const Text('회화 학습'),
+        backgroundColor: const Color(0xFFF3F4F8),
       ),
-      body: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16.0),
-        child: Column(
-          children: [
-            // ▼▼▼ [수정] 상황 안내 UI 개선 ▼▼▼
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.symmetric(vertical: 16.0),
-              padding: const EdgeInsets.all(12.0),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade200),
-              ),
-              child: Text(
-                '#$situation',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.symmetric(
+                vertical: 16.0, horizontal: 16.0),
+            padding: const EdgeInsets.all(12.0),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Text(
+              '#${widget.situation}',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16,
                   fontWeight: FontWeight.bold,
-                  color: Colors.green.shade800,
-                ),
-              ),
+                  color: Colors.green.shade800),
             ),
-            // 대화 목록
-            Expanded(
-              child: ListView.builder(
-                padding: EdgeInsets.only(bottom: 16),
-                itemCount: conversationData.length,
-                itemBuilder: (context, index) {
-                  final message = conversationData[index];
-                  return _buildConversationItem(
-                    isQuestion: message['isQuestion'],
-                    text: message['text'],
-                    characterImage: characterImage,
+          ),
+          Expanded(
+            child: _isLoading && _messages.isEmpty
+                ? Center(child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
+                Text(_loadingMessage)
+              ],
+            ))
+                : ListView.builder(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 16.0, vertical: 16.0),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                final message = _messages[index];
+                // 👈 4. ListView 빌드 로직을 새 데이터 모델에 맞게 수정
+                if (message.isUser) {
+                  return _buildUserMessageBubble(message);
+                } else {
+                  // AI 메시지는 대화 말풍선과 교육 박스를 Column으로 묶어서 표시
+                  return Column(
+                    children: [
+                      _buildAiMessageBubble(message),
+                      if (message.educationalText != null)
+                        _buildEducationalBox(message, index), // 👈 새 위젯 호출
+                    ],
                   );
-                },
-              ),
+                }
+              },
             ),
-            // ▼▼▼ [수정] 버튼 스타일 및 색상 변경 ▼▼▼
-            Padding(
-              padding: const EdgeInsets.only(bottom: 24.0, top: 8.0),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('다음 단계로 이동합니다.')),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green.shade600, // 초록색 계열로 변경
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 16.0, vertical: 8.0),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, -5))
+              ],
+            ),
+            child: SafeArea(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _textController,
+                      decoration: InputDecoration(
+                        hintText: '메시지를 입력하세요...',
+                        filled: true,
+                        fillColor: Colors.grey.shade100,
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(30.0),
+                            borderSide: BorderSide.none),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20.0, vertical: 10.0),
+                      ),
+                      onSubmitted: (_) => _sendTextMessage(),
                     ),
                   ),
-                  child: Text(
-                    '다음',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  const SizedBox(width: 8.0),
+                  IconButton(
+                    icon: Icon(_isRecording ? Icons.stop : Icons.mic,
+                        color: _isRecording ? Colors.red.shade700 : Colors.green
+                            .shade800),
+                    onPressed: _isLoading ? null : (_isRecording
+                        ? _stopRecording
+                        : _startRecording),
+                    style: IconButton.styleFrom(
+                      backgroundColor: _isRecording
+                          ? Colors.red.shade100
+                          : Colors.green.shade100,
+                      padding: const EdgeInsets.all(12),
+                    ),
                   ),
-                ),
+                  IconButton(
+                    icon: Icon(Icons.send, color: Colors.green.shade800),
+                    onPressed: _isLoading ? null : _sendTextMessage,
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          )
+        ],
       ),
     );
   }
 
-  // ▼▼▼ [수정] 실제 대화창처럼 보이도록 위젯 전체 재구성 ▼▼▼
-  Widget _buildConversationItem({
-    required bool isQuestion,
-    required String text,
-    required String characterImage,
-  }) {
-    // isQuestion(AI 질문)이면 왼쪽, 아니면(캐릭터 답변) 오른쪽 정렬
-    final alignment = isQuestion ? CrossAxisAlignment.start : CrossAxisAlignment.end;
-    final bubbleColor = isQuestion ? Colors.green.shade50 : Colors.white;
-    final textColor = Colors.black87;
-
-    final bubble = Container(
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      constraints: BoxConstraints(maxWidth: 280), // 말풍선 최대 너비
-      decoration: BoxDecoration(
-        color: bubbleColor,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-          bottomLeft: isQuestion ? Radius.circular(4) : Radius.circular(20),
-          bottomRight: isQuestion ? Radius.circular(20) : Radius.circular(4),
-        ),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(fontSize: 15, color: textColor, height: 1.4),
+  // 👈 5. 말풍선 위젯들을 역할에 맞게 3개로 분리/수정
+  Widget _buildUserMessageBubble(ChatMessage message) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            constraints: const BoxConstraints(maxWidth: 280),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
+                bottomLeft: Radius.circular(20),
+                bottomRight: Radius.circular(4),
+              ),
+            ),
+            child: Text(message.conversationText, style: const TextStyle(
+                fontSize: 15, color: Colors.black87, height: 1.4)),
+          ),
+          const SizedBox(width: 8),
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: Colors.grey.shade200,
+            backgroundImage: AssetImage(AppState.selectedCharacterImage),
+          ),
+        ],
       ),
     );
+  }
 
+  Widget _buildAiMessageBubble(ChatMessage message) {
     return Container(
-      margin: EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: alignment,
+      margin: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (isQuestion)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                Icon(Icons.auto_awesome, color: Colors.green.shade700, size: 24),
-                SizedBox(width: 8),
-                bubble,
-              ],
-            )
-          else
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                bubble,
-                SizedBox(width: 8),
-                // CircleAvatar로 캐릭터 이미지 표시
-                CircleAvatar(
-                  radius: 20,
-                  backgroundColor: Colors.grey.shade200,
-                  backgroundImage: AssetImage(characterImage),
+          Icon(Icons.auto_awesome, color: Colors.green.shade700, size: 24),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  topRight: Radius.circular(20),
+                  bottomRight: Radius.circular(20),
+                  bottomLeft: Radius.circular(4),
                 ),
-              ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Flexible(child: Text(message.conversationText,
+                      style: const TextStyle(
+                          fontSize: 15, color: Colors.black87, height: 1.4))),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: Icon(Icons.volume_up, color: Colors.green.shade600,
+                        size: 22),
+                    onPressed: () => _speak(message.conversationText),
+                    splashRadius: 20,
+                    padding: const EdgeInsets.all(4),
+                    constraints: const BoxConstraints(),
+                  )
+                ],
+              ),
             ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEducationalBox(ChatMessage message, int index) {
+    return Container(
+      margin: const EdgeInsets.only(left: 32, bottom: 16),
+      child: InkWell( // InkWell로 감싸서 탭 이벤트를 받음
+        onTap: () {
+          setState(() {
+            // 해당 메시지의 isExpanded 상태를 반전시킴
+            _messages[index].isExpanded = !_messages[index].isExpanded;
+          });
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF8E1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 항상 보이는 헤더 부분
+              Row(
+                children: [
+                  Icon(Icons.lightbulb_outline, color: Colors.amber.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  const Text("Recommended", style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Spacer(),
+                  // 펼침/접힘 상태에 따라 아이콘 변경
+                  Icon(message.isExpanded ? Icons.expand_less : Icons.expand_more, color: Colors.grey),
+                ],
+              ),
+              // isExpanded가 true일 때만 보이는 상세 내용
+              if (message.isExpanded) ...[
+                const Divider(height: 20),
+                Text(
+                  message.educationalText!,
+                  style: TextStyle(fontSize: 14, color: Colors.black87, height: 1.5, fontStyle: FontStyle.italic),
+                ),
+              ]
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -3922,6 +5688,163 @@ class _CharacterSelectionSettingsScreenState extends State<CharacterSelectionSet
           ],
         ),
       ),
+    );
+  }
+}
+
+class GoalSettingScreen extends StatefulWidget {
+  const GoalSettingScreen({super.key});
+
+  @override
+  State<GoalSettingScreen> createState() => _GoalSettingScreenState();
+}
+
+class _GoalSettingScreenState extends State<GoalSettingScreen> {
+  final ApiService _apiService = ApiService();
+  bool _isLoading = false;
+
+  // 사용자가 설정할 값들을 저장하는 변수들
+  double _currentLevel = 1.0;
+  double _goalLevel = 2.0;
+  String _frequencyType = 'daily'; // 'daily' or 'interval'
+  double _frequencyValue = 1.0;
+  double _sessionDuration = 30.0;
+  final Map<String, bool> _preferredStyles = {
+    'conversation': true,
+    'grammar': false,
+    'pronunciation': false,
+  };
+
+  Future<void> _saveGoal() async {
+    setState(() => _isLoading = true);
+
+    final selectedStyles = _preferredStyles.entries
+        .where((entry) => entry.value)
+        .map((entry) => entry.key)
+        .toList();
+
+    if (selectedStyles.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('선호 학습 방식을 하나 이상 선택해주세요.'), backgroundColor: Colors.red),
+      );
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+      final userId = AppState.userId;
+      if (userId == null) {
+        throw Exception('사용자 정보를 찾을 수 없습니다. 다시 로그인해주세요.');
+      }
+
+      // ▼▼▼ [핵심 수정] API 호출 후 반환된 데이터를 newPlan 변수에 저장합니다. ▼▼▼
+      final newProfile = await _apiService.createLearningPlan(
+        userId: userId,
+        currentLevel: _currentLevel.toInt(),
+        goalLevel: _goalLevel.toInt(),
+        frequencyType: _frequencyType,
+        frequencyValue: _frequencyValue.toInt(),
+        sessionDuration: _sessionDuration.toInt(),
+        preferredStyles: selectedStyles,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('학습 목표가 성공적으로 저장되었습니다!')),
+        );
+        // ▼▼▼ [수정] 이전 화면으로 돌아갈 때, 방금 받은 newProfile 데이터를 함께 전달합니다. ▼▼▼
+        Navigator.pop(context, newProfile);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('오류: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('학습 목표 설정')),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+        padding: const EdgeInsets.all(24.0),
+        children: [
+          _buildSliderSection('현재 레벨', _currentLevel, (val) => setState(() => _currentLevel = val)),
+          _buildSliderSection('목표 레벨', _goalLevel, (val) => setState(() => _goalLevel = val)),
+          const Divider(height: 40),
+          _buildFrequencySection(),
+          const Divider(height: 40),
+          _buildSliderSection('1회 학습 시간 (분)', _sessionDuration, (val) => setState(() => _sessionDuration = val), min: 10, max: 120, divisions: 11),
+          const Divider(height: 40),
+          _buildStyleSection(),
+          const SizedBox(height: 40),
+          ElevatedButton(
+            onPressed: _saveGoal,
+            child: const Text('목표 저장하기'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // UI를 그리는 헬퍼 위젯들
+  Widget _buildSliderSection(String title, double value, ValueChanged<double> onChanged, {double min = 1, double max = 10, int? divisions = 9}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$title: ${value.toInt()}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        Slider(value: value, min: min, max: max, divisions: divisions, label: value.toInt().toString(), onChanged: onChanged),
+      ],
+    );
+  }
+
+  Widget _buildFrequencySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('학습 빈도', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        RadioListTile<String>(
+          title: const Text('매일'),
+          value: 'daily',
+          groupValue: _frequencyType,
+          onChanged: (val) => setState(() => _frequencyType = val!),
+        ),
+        RadioListTile<String>(
+          title: const Text('일 간격'),
+          value: 'interval',
+          groupValue: _frequencyType,
+          onChanged: (val) => setState(() => _frequencyType = val!),
+        ),
+        _buildSliderSection(
+            _frequencyType == 'daily' ? '하루에 몇 번?' : '며칠에 한 번?',
+            _frequencyValue,
+                (val) => setState(() => _frequencyValue = val),
+            max: 5,
+            divisions: 4
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStyleSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('선호 학습 방식 (1개 이상 선택)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ..._preferredStyles.keys.map((style) => CheckboxListTile(
+          title: Text(style),
+          value: _preferredStyles[style],
+          onChanged: (val) => setState(() => _preferredStyles[style] = val!),
+        )).toList(),
+      ],
     );
   }
 }
