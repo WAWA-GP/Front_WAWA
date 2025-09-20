@@ -30,6 +30,7 @@ dev_dependencies:
   flutter_lints: ^2.0.0
   hive_generator: ^2.0.0
   build_runner: ^2.3.3
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
@@ -51,3 +52,9 @@ flutter:
     - assets/hotel.png
     - assets/words_alpha.txt
     - assets/TOEIC:TOEFL.txt
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/all.png" # 👈 1단계에서 준비한 아이콘 이미지 경로
+  min_sdk_android: 21 # 안드로이드 최소 SDK 버전 (보통 21)

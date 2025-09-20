@@ -213,6 +213,14 @@ class AppState {
   static String? userId;
   static Map<String, dynamic>? learningGoals;
 
+  static void updateFromProfile(Map<String, dynamic> profileData) {
+    userName = profileData['name'];
+    userLevel = profileData['assessed_level'];
+    userEmail = profileData['email'];
+    userId = profileData['user_id'];
+    learningGoals = profileData['learning_goals'] as Map<String, dynamic>?;
+  }
+
   static Map<String, dynamic> firstLesson = {}; // 추천 첫 학습
   static List<String> dailyGoals = []; // 오늘의 목표
 }
@@ -236,46 +244,30 @@ class _SplashScreenState extends State<SplashScreen> {
   Future<void> _checkLoginStatus() async {
     await Future.delayed(const Duration(seconds: 1));
 
-    // 👇 [수정] 자동 로그인 설정을 먼저 확인합니다.
-    final bool shouldAutoLogin = await _apiService.getAutoLoginPreference();
-    print("✅ [앱 시작] 저장된 '자동 로그인' 설정: $shouldAutoLogin");
+    final bool autoLoginEnabled = await _apiService.getAutoLoginPreference();
+    print("✅ [앱 시작] 저장된 '자동 로그인' 설정: $autoLoginEnabled");
 
-    if (!shouldAutoLogin) {
-      print("➡️ '자동 로그인'이 꺼져있으므로 초기 화면으로 이동합니다.");
+    if (!autoLoginEnabled) {
+      // 1. 자동 로그인이 꺼져있으면 바로 초기 화면으로
       Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => InitialScreen()),
-      );
+          context, MaterialPageRoute(builder: (context) => InitialScreen()));
       return;
     }
 
-    print("➡️ '자동 로그인'이 켜져있으므로 토큰 검증을 시작합니다.");
+    // 2. 자동 로그인이 켜져있으면, 백엔드에 "자동 로그인 가능한가요?" 라고 직접 물어봅니다.
+    final response = await _apiService.attemptAutoLogin();
 
-    // 자동 로그인이 켜져 있는 경우, 기존의 토큰 검증 로직을 실행합니다.
-    try {
-      final token = await _apiService.getToken();
-
-      if (token == null) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => InitialScreen()),
-        );
-        return;
-      }
-
-      await _apiService.getUserProfile();
-
+    if (response['status'] == 'ok' && mounted) {
+      // 3. 백엔드가 'ok' 사인을 보내면, 홈 화면으로 이동합니다.
+      //    이때 백엔드가 보내준 최신 프로필 정보로 AppState를 업데이트합니다.
+      AppState.updateFromProfile(response['user_profile']);
       Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const HomeScreen()),
-      );
-
-    } catch (e) {
+          context, MaterialPageRoute(builder: (context) => const HomeScreen()));
+    } else {
+      // 4. 백엔드가 'ok' 사인을 보내지 않으면 (토큰 만료 등), 로그아웃 처리 후 초기 화면으로 이동합니다.
       await _apiService.logout();
       Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => InitialScreen()),
-      );
+          context, MaterialPageRoute(builder: (context) => InitialScreen()));
     }
   }
 
@@ -308,7 +300,7 @@ class MyApp extends StatelessWidget {
           elevation: 0,
           titleTextStyle: TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'Pretendard'),
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           elevation: 0,
           color: Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -333,7 +325,7 @@ class MyApp extends StatelessWidget {
           foregroundColor: Colors.white,
         ),
         checkboxTheme: CheckboxThemeData(fillColor: MaterialStateProperty.all(Colors.green)),
-        tabBarTheme: const TabBarTheme(
+        tabBarTheme: const TabBarThemeData(
             labelColor: Colors.green,
             unselectedLabelColor: Colors.grey,
             indicatorColor: Colors.green
@@ -658,6 +650,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // 👈 2. 로그인 버튼을 눌렀을 때 호출될 함수
   Future<void> _handleLogin() async {
+    print("--- _handleLogin 함수 시작됨! ---");
     FocusScope.of(context).unfocus();
 
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
@@ -668,6 +661,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
+      print("✅ [로그인] '자동 로그인' 설정을 저장합니다: $_autoLogin");
       await _apiService.saveAutoLoginPreference(_autoLogin);
 
       // 1단계: 회원가입 API 호출 (이제 토큰을 반환함)
@@ -3154,6 +3148,21 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
   @override
   bool get wantKeepAlive => true;
 
+  void _handleError(String message) {
+    // 화면에 오류 메시지를 표시하고 로딩 상태를 중지하는 역할을 합니다.
+    if (mounted) {
+      setState(() {
+        _errorMessage = message;
+        _isLoadingAnalysis = false; // 모든 로딩 상태를 false로 설정
+        _isLoadingClone = false;
+        _isLoadingCorrection = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    }
+  }
+
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   final FlutterSoundPlayer _player = FlutterSoundPlayer();
 
@@ -3202,28 +3211,63 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
 
   // 녹음 시작/중지 및 분석/복제 실행
   Future<void> _toggleRecording() async {
+    final ApiService _apiService = ApiService();
     if (!_isRecorderReady) return;
 
     if (_recorder.isRecording) {
       // 녹음 중지
-      // stopRecorder()가 UI 업데이트를 유발할 수 있으므로, 먼저 호출
       await _recorder.stopRecorder();
-      // UI를 즉시 '녹음 중지' 상태로 갱신
       setState(() {});
 
       if (_audioPath != null) {
         setState(() {
-          _isLoadingClone = true;
-          _isLoadingAnalysis = true;
+          _isLoadingAnalysis = true; // 로딩 상태 시작
+          _isLoadingClone = true; // 클론 로딩 상태도 시작
           _errorMessage = null;
+          _analysisResult = null;
         });
-        await Future.wait([
-          _cloneUserVoice(_audioPath!),
-          _analyzePronunciation(_audioPath!),
-        ]);
+
+        try {
+          // [핵심] 분석과 음성 등록을 동시에 병렬로 실행합니다.
+          await Future.wait([
+            // 작업 1: 분석 및 DB 저장
+            _apiService.analyzeAndSavePronunciation(
+              audioPath: _audioPath!,
+              targetText: 'Can I book a flight to LA now?',
+            ).then((response) {
+              if (mounted && response['success'] == true) {
+                setState(() {
+                  _analysisResult = PronunciationAnalysisResult.fromJson(response);
+                });
+              } else {
+                _handleError(response['error'] ?? '분석/저장에 실패했습니다.');
+              }
+            }),
+
+            // 작업 2: 음성 등록 (Voice Clone)
+            _cloneUserVoice(_audioPath!),
+
+          ]);
+
+          if(mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('✅ 분석 및 음성 등록이 완료되었습니다!')),
+            );
+          }
+
+        } catch (e) {
+          _handleError('오류가 발생했습니다: $e');
+        } finally {
+          if (mounted) {
+            setState(() {
+              _isLoadingAnalysis = false; // 모든 로딩 상태 종료
+              _isLoadingClone = false;
+            });
+          }
+        }
       }
     } else {
-      // 녹음 시작
+      // 녹음 시작 (기존과 동일)
       final tempDir = await getTemporaryDirectory();
       _audioPath = '${tempDir.path}/user_pronunciation.m4a';
       setState(() {
@@ -3232,10 +3276,8 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
       });
 
       await _recorder.startRecorder(toFile: _audioPath, codec: Codec.aacMP4);
-      // UI를 즉시 '녹음 중' 상태로 갱신
       setState(() {});
     }
-    // 마지막 setState는 삭제되었습니다. 각 분기 안에서 상태를 관리합니다.
   }
 
   // 발음 분석 API를 호출하는 새 함수
@@ -3283,6 +3325,9 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
 
   // 음성 복제 함수
   Future<void> _cloneUserVoice(String path) async {
+
+    print("--- [1/4] _cloneUserVoice 함수 시작됨 ---");
+
     try {
       const String baseUrl = String.fromEnvironment(
           'AI_BACKEND_URL',
@@ -3294,6 +3339,8 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
       final audioBytes = await file.readAsBytes();
       final base64Audio = base64Encode(audioBytes);
 
+      print("--- [2/4] AI 서버로 음성 등록 요청을 보냅니다... ---");
+
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -3303,10 +3350,15 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
         }),
       ).timeout(const Duration(seconds: 45));
 
+      print("--- [3/4] AI 서버 응답 수신 ---");
+      print("상태 코드: ${response.statusCode}");
+      print("응답 내용: ${utf8.decode(response.bodyBytes)}");
+
       if (response.statusCode == 200) {
         final responseBody = json.decode(utf8.decode(response.bodyBytes));
         if (responseBody['success']) {
           setState(() => _isVoiceCloned = true);
+          print("--- [4/4] 성공: _isVoiceCloned 스위치가 true로 변경됨! ---");
         } else {
           setState(() => _errorMessage = responseBody['error'] ?? '음성 복제에 실패했습니다.');
         }
@@ -3315,6 +3367,7 @@ class _StudyScreenState extends State<StudyScreen> with AutomaticKeepAliveClient
       }
     } catch (e) {
       setState(() => _errorMessage = '음성 복제 중 오류 발생: $e');
+      print("--- [4/4] 실패: catch 블록에서 오류 발생: $e ---");
     } finally {
       setState(() => _isLoadingClone = false);
     }

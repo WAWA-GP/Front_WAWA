@@ -1,5 +1,6 @@
 // lib/api_service.dart
 
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async'; // TimeoutException 사용을 위해 import
@@ -7,6 +8,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:learning_app/models/user_profile.dart';
 import 'package:learning_app/models/statistics_model.dart';
 import 'package:learning_app/main.dart';
+import 'package:uuid/uuid.dart' show Uuid;
 
 // API 통신 중 발생하는 예외를 처리하기 위한 클래스
 class ApiException implements Exception {
@@ -33,6 +35,12 @@ class ApiService {
       'BACKEND_URL',
       defaultValue: 'http://10.0.2.2:8001' // 기본값은 에뮬레이터용으로 설정
   );
+
+  static const String _aiBaseUrl = String.fromEnvironment(
+      'AI_BACKEND_URL',
+      defaultValue: 'http://10.0.2.2:8000' // AI 서버 포트
+  );
+
   static const Duration _timeoutDuration = Duration(seconds: 30);
 
   // --- 토큰 및 헤더 관리 ---
@@ -64,6 +72,36 @@ class ApiService {
   Future<void> logout() async {
     await _userSettingsBox.delete('auth_token');
     await _userSettingsBox.delete('auto_login');
+  }
+
+  Future<Map<String, dynamic>> analyzeAndSavePronunciation({
+    required String audioPath,
+    required String targetText,
+  }) async {
+    final userId = AppState.userId;
+    if (userId == null) throw ApiException('사용자 ID가 없습니다. 다시 로그인해주세요.');
+
+    // main.py에 정의된 엔드포인트 주소
+    final url = Uri.parse('$_aiBaseUrl/api/pronunciation/analyze');
+    final headers = await _getAuthHeaders();
+
+    final file = File(audioPath);
+    final audioBytes = await file.readAsBytes();
+    final base64Audio = base64Encode(audioBytes);
+
+    final body = jsonEncode({
+      'audio_base64': base64Audio,
+      'target_text': targetText,
+      'user_level': AppState.userLevel ?? 'B1',
+      'language': 'en',
+      // 👇 DB에 저장하기 위한 필수 정보들을 함께 보냅니다.
+      'save_to_database': true,
+      'user_id': userId,
+      'session_id': const Uuid().v4(), // 고유한 세션 ID 생성
+    });
+
+    final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
+    return _processResponse(response);
   }
 
   Future<StatisticsResponse> getStatistics() async {
@@ -138,6 +176,28 @@ class ApiService {
       await saveToken(responseBody['access_token']);
     }
     return responseBody;
+  }
+
+  Future<Map<String, dynamic>> attemptAutoLogin() async {
+    final token = await getToken();
+    if (token == null) {
+      // 기기에 토큰이 없으면 바로 실패 처리
+      return {'status': 'error', 'message': 'No token found'};
+    }
+
+    final url = Uri.parse('$_authPlanStatsBaseUrl/auth/login/auto');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json; charset=UTF-8'},
+      body: jsonEncode({'token': token}),
+    ).timeout(_timeoutDuration);
+
+    // _processResponse는 2xx가 아닐 때 오류를 던지므로, try-catch로 감쌉니다.
+    try {
+      return _processResponse(response);
+    } catch(e) {
+      return {'status': 'error', 'message': e.toString()};
+    }
   }
 
   // 사용자 프로필 조회
