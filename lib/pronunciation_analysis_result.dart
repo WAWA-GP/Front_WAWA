@@ -6,6 +6,9 @@ class PronunciationAnalysisResult {
   final double fluencyScore;
   final List<String> detailedFeedback;
   final List<String> suggestions;
+  final String grade;
+  final List<String> improvementPriority;
+  final String? sessionId;
 
   PronunciationAnalysisResult({
     required this.overallScore,
@@ -15,21 +18,25 @@ class PronunciationAnalysisResult {
     required this.fluencyScore,
     required this.detailedFeedback,
     required this.suggestions,
+    required this.grade,
+    required this.improvementPriority,
+    this.sessionId,
   });
 
+  // ▼▼▼ [핵심 수정] 이 fromJson 생성자를 새로운 데이터 구조에 맞게 수정합니다. ▼▼▼
   factory PronunciationAnalysisResult.fromJson(Map<String, dynamic> json) {
-    // 백엔드의 data.scores 객체와 data.feedback 객체에서 데이터를 추출
-    final scores = json['data']['scores'] ?? {};
-    final feedback = json['data']['feedback'] ?? {};
-
+    // 백엔드에서 'scores'와 'feedback' 객체 없이 바로 전달되는 값들을 파싱합니다.
     return PronunciationAnalysisResult(
-      overallScore: (scores['overall'] ?? 0.0).toDouble(),
-      pitchScore: (scores['pitch'] ?? 0.0).toDouble(),
-      rhythmScore: (scores['rhythm'] ?? 0.0).toDouble(),
-      stressScore: (scores['stress'] ?? 0.0).toDouble(),
-      fluencyScore: (scores['fluency'] ?? 0.0).toDouble(),
-      detailedFeedback: List<String>.from(feedback['detailed'] ?? []),
-      suggestions: List<String>.from(feedback['suggestions'] ?? []),
+      overallScore: (json['overall_score'] as num?)?.toDouble() ?? 0.0,
+      pitchScore: (json['pitch_score'] as num?)?.toDouble() ?? 0.0,
+      rhythmScore: (json['rhythm_score'] as num?)?.toDouble() ?? 0.0,
+      stressScore: (json['stress_score'] as num?)?.toDouble() ?? 0.0,
+      fluencyScore: (json['fluency_score'] as num?)?.toDouble() ?? 0.0,
+      detailedFeedback: List<String>.from(json['detailed_feedback'] ?? []),
+      suggestions: List<String>.from(json['suggestions'] ?? []),
+      grade: json['grade'] as String? ?? 'N/A',
+      improvementPriority: List<String>.from(json['improvement_priority'] ?? []),
+      sessionId: json['session_id'] as String?,
     );
   }
 }

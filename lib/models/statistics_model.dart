@@ -46,8 +46,9 @@ class ProgressStats {
 class StatisticsResponse {
   final OverallStats overallStats;
   final ProgressStats? progressStats;
+  final String? feedback;
 
-  StatisticsResponse({required this.overallStats, this.progressStats});
+  StatisticsResponse({required this.overallStats, this.progressStats, this.feedback});
 
   factory StatisticsResponse.fromJson(Map<String, dynamic> json) {
     return StatisticsResponse(
@@ -55,6 +56,7 @@ class StatisticsResponse {
       progressStats: json['progress_statistics'] != null
           ? ProgressStats.fromJson(json['progress_statistics'])
           : null,
+      feedback: json['feedback'],
     );
   }
 }

@@ -1,21 +1,26 @@
-// lib/models/user_profile.dart (새 파일)
-
 class UserProfile {
   final String id;
   final String email;
+  final bool isAdmin;
   final Map<String, dynamic> userMetadata;
 
   UserProfile({
     required this.id,
     required this.email,
     required this.userMetadata,
+    required this.isAdmin,
   });
 
-  // 서버 응답(JSON)에서 UserProfile 객체로 변환하는 팩토리 생성자
+  // 편의 getter들
+  String get name => userMetadata['name'] ?? '';
+  String get level => userMetadata['level'] ?? '';
+
   factory UserProfile.fromJson(Map<String, dynamic> json) {
     return UserProfile(
-      id: json['user_id'] ?? 'Unknown ID',
+      id: json['user_id'] ?? json['id'] ?? 'Unknown ID',
       email: json['email'] ?? 'No email provided',
+      // ▼▼▼ [수정] 다양한 필드명에 대응 ▼▼▼
+      isAdmin: json['isAdmin'] ?? json['is_admin'] ?? false,
       userMetadata: Map<String, dynamic>.from(json['user_metadata'] ?? {}),
     );
   }
