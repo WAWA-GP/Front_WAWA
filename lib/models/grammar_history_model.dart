@@ -2,12 +2,13 @@
 
 class GrammarHistory {
   final int id;
-  // ▼▼▼ [수정] 필드 변경 ▼▼▼
-  final String transcribedText; // 사용자가 말한 문장
-  final String correctedText;   // 교정된 문장
+  final String transcribedText;
+  final String correctedText;
   final List<String> grammarFeedback;
   final List<String> vocabularySuggestions;
   final DateTime createdAt;
+  bool isFavorite;
+  final bool isCorrect; // <-- [추가] 정답 여부 필드
 
   GrammarHistory({
     required this.id,
@@ -16,6 +17,8 @@ class GrammarHistory {
     required this.grammarFeedback,
     required this.vocabularySuggestions,
     required this.createdAt,
+    this.isFavorite = false,
+    required this.isCorrect, // <-- [추가] 생성자에 추가
   });
 
   factory GrammarHistory.fromJson(Map<String, dynamic> json) {
@@ -23,10 +26,11 @@ class GrammarHistory {
       id: json['id'],
       transcribedText: json['transcribed_text'] ?? '',
       correctedText: json['corrected_text'] ?? '',
-      // ▼▼▼ [수정] 각 필드에 맞게 파싱 ▼▼▼
-      grammarFeedback: json['grammar_feedback'] != null ? List<String>.from(json['grammar_feedback']) : [],
-      vocabularySuggestions: json['vocabulary_suggestions'] != null ? List<String>.from(json['vocabulary_suggestions']) : [],
+      grammarFeedback: List<String>.from(json['grammar_feedback'] ?? []),
+      vocabularySuggestions: List<String>.from(json['vocabulary_suggestions'] ?? []),
       createdAt: DateTime.parse(json['created_at']),
+      isFavorite: json['is_favorite'] ?? false,
+      isCorrect: json['is_correct'] ?? false, // <-- [추가] JSON 파싱 로직 추가
     );
   }
 }

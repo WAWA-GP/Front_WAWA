@@ -551,12 +551,30 @@ class ApiService {
   Future<Map<String, dynamic>> checkIn() async {
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/attendance/check-in');
     final headers = await _getAuthHeaders();
-    if (!headers.containsKey('Authorization')) throw ApiException(
-        '로그인이 필요합니다.');
+    if (!headers.containsKey('Authorization')) throw ApiException('로그인이 필요합니다.');
 
-    final response = await http.post(url, headers: headers).timeout(
-        _timeoutDuration);
-    return _processResponse(response);
+    final response = await http.post(url, headers: headers).timeout(_timeoutDuration);
+    final attendanceResponse = _processResponse(response); // 출석 체크 결과 먼저 처리
+
+    try {
+      // executePointTransaction 함수를 호출하여 포인트를 지급합니다.
+      final pointResponse = await executePointTransaction(
+        amount: 100,
+        reason: "출석 체크 보상",
+      );
+      print("✅ [출석 체크 응답] 백엔드가 보내준 전체 응답: $pointResponse");
+      // 반환된 응답에서 final_points 값을 추출
+      final newPoints = pointResponse['final_points'];
+      if (newPoints != null && newPoints is int) {
+        // AppState의 points 값을 새로운 값으로 갱신
+        AppState.points.value = newPoints;
+        print("✅ 출석 포인트 지급 완료! AppState 업데이트: ${AppState.points}");
+      }
+    } catch (e) {
+      print("⚠️ 출석은 성공했으나 포인트 지급에 실패했습니다: $e");
+    }
+
+    return attendanceResponse; // 기존 출석 응답을 그대로 반환
   }
 
   // --- 출석 기록 조회 API 호출 ---
@@ -1282,11 +1300,13 @@ class ApiService {
     await http.patch(url, headers: headers).timeout(_timeoutDuration);
   }
 
-  Future<List<dynamic>> getFavoriteWords() async {
+  Future<List<UserWord>> getFavoriteWords() async {
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/vocabulary/favorites');
     final headers = await _getAuthHeaders();
     final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
-    return _processResponse(response);
+    final List<dynamic> data = _processResponse(response);
+    // UserWord 객체 리스트로 변환하여 반환
+    return data.map((item) => UserWord.fromJson(item)).toList();
   }
 
   Future<Map<String, dynamic>> getVocabularyStats() async {
@@ -1358,6 +1378,7 @@ class ApiService {
     required String correctedText,
     required List<String> grammarFeedback,
     required List<String> vocabularySuggestions,
+    required bool isCorrect, // <-- [추가]
   }) async {
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/grammar/history/add');
     final headers = await _getAuthHeaders();
@@ -1367,10 +1388,28 @@ class ApiService {
       'corrected_text': correctedText,
       'grammar_feedback': grammarFeedback,
       'vocabulary_suggestions': vocabularySuggestions,
+      'is_correct': isCorrect, // <-- [추가]
     });
 
     final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
     _processResponse(response);
+  }
+
+  // 문법 즐겨찾기 상태 업데이트
+  Future<void> updateGrammarFavoriteStatus({required int historyId, required bool isFavorite}) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/grammar/history/$historyId/favorite?is_favorite=$isFavorite');
+    final headers = await _getAuthHeaders();
+    final response = await http.patch(url, headers: headers).timeout(_timeoutDuration);
+    _processResponse(response);
+  }
+
+  // 즐겨찾기된 문법 이력 목록 조회
+  Future<List<GrammarHistory>> getFavoriteGrammarHistory() async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/grammar/favorites');
+    final headers = await _getAuthHeaders();
+    final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
+    final List<dynamic> data = _processResponse(response);
+    return data.map((item) => GrammarHistory.fromJson(item)).toList();
   }
 
   // 비밀번호 변경
@@ -1614,20 +1653,18 @@ class ApiService {
     required int groupId,
     required String title,
     required String description,
-    required String challengeType,
-    required int targetValue,
     required int durationDays,
   }) async {
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/$groupId/challenges');
     final headers = await _getAuthHeaders();
+    // challenge_type, target_value 제거
     final body = jsonEncode({
       'title': title,
       'description': description,
-      'challenge_type': challengeType,
-      'target_value': targetValue,
       'duration_days': durationDays,
     });
     final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
+    // 반환 모델도 새로운 GroupChallenge.fromJson으로 변경 (이 부분은 이전 답변에서 누락되었을 수 있습니다)
     return GroupChallenge.fromJson(_processResponse(response));
   }
 
@@ -1645,6 +1682,14 @@ class ApiService {
     // 이 API는 성공 여부만 확인하므로, 실패 시에만 예외가 발생합니다.
     final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
     _processResponse(response);
+  }
+
+  Future<void> completeChallenge(int challengeId) async {
+    // 백엔드에 새로 만든 POST /api/challenges/{challenge_id}/complete 엔드포인트를 호출합니다.
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/challenges/$challengeId/complete');
+    final headers = await _getAuthHeaders();
+    final response = await http.post(url, headers: headers).timeout(_timeoutDuration);
+    _processResponse(response); // 성공 여부만 확인
   }
 
   Future<GroupChallenge> updateGroupChallenge({
@@ -1669,5 +1714,28 @@ class ApiService {
     final response = await http.delete(url, headers: headers).timeout(_timeoutDuration);
     if (response.statusCode == 204) return;
     _processResponse(response);
+  }
+
+  // 포인트 교환소
+  Future<Map<String, dynamic>> executePointTransaction({
+    required int amount, // 적립은 양수, 사용은 음수
+    required String reason,
+  }) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/points/transaction');
+    final headers = await _getAuthHeaders();
+    if (!headers.containsKey('Authorization')) throw ApiException('로그인이 필요합니다.');
+
+    // AppState에서 현재 사용자 ID 가져오기
+    final userId = AppState.userId;
+    if (userId == null) throw ApiException('사용자 정보를 찾을 수 없습니다.');
+
+    final body = jsonEncode({
+      'user_id': userId,
+      'amount': amount,
+      'reason': reason,
+    });
+
+    final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
+    return _processResponse(response);
   }
 }
