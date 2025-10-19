@@ -17,6 +17,8 @@ import 'package:learning_app/models/learning_progress_model.dart';
 import 'package:learning_app/models/user_word_model.dart';
 import 'package:learning_app/models/challenge_model.dart';
 
+import 'models/point_history_model.dart';
+
 // API 통신 중 발생하는 예외를 처리하기 위한 클래스
 class ApiException implements Exception {
   final String message;
@@ -370,17 +372,19 @@ class ApiService {
 
   // 학습 목표(계획) 생성
   Future<Map<String, dynamic>> createLearningPlan({
-    required int sessionDuration,
-    required List<String> preferredStyles,
+    required int conversationDuration,
+    required int grammarCount,
+    required int pronunciationCount,
   }) async {
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/plans/create');
     final headers = await _getAuthHeaders();
     if (!headers.containsKey('Authorization')) throw ApiException('로그인이 필요합니다.');
 
-    // 백엔드가 요구하는 간단한 요청 본문
+    // 백엔드가 요구하는 새로운 요청 본문
     final body = jsonEncode({
-      'session_duration_minutes': sessionDuration,
-      'preferred_styles': preferredStyles,
+      'conversation_duration': conversationDuration,
+      'grammar_count': grammarCount,
+      'pronunciation_count': pronunciationCount,
     });
 
     final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
@@ -1472,8 +1476,9 @@ class ApiService {
   // [추가] 학습 목표(계획) 수정
   Future<Map<String, dynamic>> updateLearningPlan({
     required int planId, // 수정할 계획의 ID
-    required int sessionDuration,
-    required List<String> preferredStyles,
+    required int conversationDuration,
+    required int grammarCount,
+    required int pronunciationCount,
   }) async {
     // PUT 요청을 보낼 URL
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/plans/$planId');
@@ -1482,8 +1487,9 @@ class ApiService {
 
     // 요청 본문(body)은 createLearningPlan과 동일한 형식을 사용
     final body = jsonEncode({
-      'session_duration_minutes': sessionDuration,
-      'preferred_styles': preferredStyles,
+      'conversation_duration': conversationDuration,
+      'grammar_count': grammarCount,
+      'pronunciation_count': pronunciationCount,
     });
 
     // http.put 메소드를 사용하여 요청
@@ -1737,5 +1743,48 @@ class ApiService {
 
     final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
     return _processResponse(response);
+  }
+
+  Future<Map<String, dynamic>> searchWordOnline(String query) async {
+    // 새로 만든 백엔드 엔드포인트를 호출합니다.
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/vocabulary/word-search-online?query=${Uri.encodeComponent(query)}');
+    final headers = await _getAuthHeaders();
+
+    final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
+    // _processResponse가 성공/실패를 모두 처리합니다.
+    return _processResponse(response);
+  }
+
+  Future<List<PointTransaction>> getPointHistory() async {
+    // 백엔드에 새로 만들 API 엔드포인트 주소입니다.
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/points/history');
+    final token = await getToken();
+    if (token == null) {
+      throw ApiException('로그인이 필요합니다.');
+    }
+
+    try {
+      final response = await http.get(
+        url,
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        // UTF-8로 디코딩하여 한글 깨짐 방지
+        final List<dynamic> data = jsonDecode(utf8.decode(response.bodyBytes));
+        // 받아온 JSON 리스트를 PointTransaction 객체 리스트로 변환하여 반환
+        return data.map((item) => PointTransaction.fromJson(item)).toList();
+      } else {
+        // 서버에서 에러 메시지를 보냈을 경우
+        final errorData = jsonDecode(utf8.decode(response.bodyBytes));
+        throw ApiException(errorData['detail'] ?? '포인트 내역을 불러오는데 실패했습니다.');
+      }
+    } catch (e) {
+      // 네트워크 오류 등
+      throw ApiException('포인트 내역을 불러오는 중 오류가 발생했습니다.');
+    }
   }
 }

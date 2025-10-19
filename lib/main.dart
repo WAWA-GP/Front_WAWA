@@ -22,6 +22,7 @@ import 'package:learning_app/models/pronunciation_history_model.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:learning_app/models/user_profile.dart';
+import 'package:learning_app/models/point_history_model.dart';
 import 'package:learning_app/models/statistics_model.dart';
 import 'package:learning_app/models/grammar_history_model.dart';
 import 'package:learning_app/models/study_group_model.dart';
@@ -56,7 +57,6 @@ Route _createSlideRoute(Widget page) {
 class WordData {
   final String word;
   final String pronunciation;
-  final String partOfSpeech;
   final String definition;
   final String englishExample;
   bool isMemorized;
@@ -65,7 +65,6 @@ class WordData {
   WordData({
     required this.word,
     required this.pronunciation,
-    required this.partOfSpeech,
     required this.definition,
     required this.englishExample,
     this.isMemorized = false,
@@ -91,66 +90,6 @@ class Dictionary {
 
   static bool contains(String word) {
     return _words.contains(word.toLowerCase());
-  }
-}
-
-// 3. API 호출 함수 (수정 없음)
-Future<Map<String, dynamic>?> fetchWordData(String word) async {
-  try {
-    final translator = GoogleTranslator();
-    Translation translation = await translator.translate(word, from: 'en', to: 'ko');
-    String koreanMeaning = translation.text;
-
-    final dictUrl = Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/$word');
-    final dictResponse = await http.get(dictUrl);
-
-    Map<String, dynamic> result = {
-      'word': word,
-      'koreanMeaning': koreanMeaning,
-    };
-
-    if (dictResponse.statusCode == 200) {
-      final dictData = json.decode(dictResponse.body) as List<dynamic>;
-      final firstEntry = dictData.first;
-
-      final phonetics = (firstEntry['phonetics'] as List?)?.firstWhere(
-              (p) => p['text'] != null && p['text'].toString().isNotEmpty,
-          orElse: () => null
-      );
-      result['pronunciation'] = phonetics?['text'] ?? '';
-
-      final meanings = firstEntry['meanings'] as List?;
-      String example = '';
-      String partOfSpeech = '';
-
-      if (meanings != null && meanings.isNotEmpty) {
-        // ▼▼▼ [수정] 첫 번째 의미에서 품사를 추출합니다. ▼▼▼
-        partOfSpeech = meanings.first['partOfSpeech'] ?? '';
-
-        for (var meaning in meanings) {
-          final definitions = meaning['definitions'] as List?;
-          if (definitions != null) {
-            for (var definition in definitions) {
-              if (definition['example'] != null) {
-                example = definition['example'];
-                break;
-              }
-            }
-            if (example.isNotEmpty) break;
-          }
-        }
-      }
-      result['partOfSpeech'] = partOfSpeech;
-      result['englishExample'] = example.isNotEmpty ? example : '예문을 찾을 수 없습니다';
-    } else {
-      result['pronunciation'] = '';
-      result['partOfSpeech'] = '';
-      result['englishExample'] = '예문을 찾을 수 없습니다';
-    }
-    return result;
-  } catch (e) {
-    print('### 번역 또는 API 호출 중 예외 발생: $e');
-    return null;
   }
 }
 
@@ -269,7 +208,20 @@ class AppState {
     userLevel = profileData['assessed_level'];
     userEmail = profileData['email'];
     userId = profileData['user_id'];
-    learningGoals = profileData['learning_goals'] as Map<String, dynamic>?;
+
+    final rawGoals = profileData['learning_goals'];
+    if (rawGoals is String) {
+      try {
+        learningGoals = jsonDecode(rawGoals) as Map<String, dynamic>?;
+      } catch (e) {
+        print("❌ learning_goals 문자열 파싱 실패: $e");
+        learningGoals = null;
+      }
+    } else if (rawGoals is Map) {
+      learningGoals = rawGoals as Map<String, dynamic>?;
+    } else {
+      learningGoals = null;
+    }
 
     // DB에 저장된 'en', 'ko' 같은 언어 코드를 '영어', '한국어' 같은 표시 이름으로 변환하여 저장
     nativeLanguage = _languageCodeToName[profileData['native_language']];
@@ -559,13 +511,16 @@ class InitialScreen extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                  ),
                   onPressed: () {
                     Navigator.push(
                       context,
                       MaterialPageRoute(builder: (context) => SignupScreen()),
                     );
                   },
-                  child: Text('회원가입'), // 스타일은 Theme에서 자동으로 적용됨
+                  child: Text('회원가입'),
                 ),
               ),
               SizedBox(height: 16),
@@ -618,10 +573,10 @@ class _SignupScreenState extends State<SignupScreen> {
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
-  bool _agreeToTerms = false;
-  bool _agreeToPrivacy = false;
-  bool _agreeToMarketing = false;
-  bool _agreeToAge = false;
+  bool _agreeToAll = false; // '전체 동의' 상태
+  bool _agreeToTerms = false; // '이용약관' 상태
+  bool _agreeToPrivacy = false; // '개인정보 처리방침' 상태
+  bool _agreeToMarketing = false; // '마케팅' 상태 (선택)
 
   final ApiService _apiService = ApiService();
   bool _isLoading = false;
@@ -640,6 +595,24 @@ class _SignupScreenState extends State<SignupScreen> {
     _confirmPasswordController.dispose();
     _nameController.dispose();
     super.dispose();
+  }
+
+  void _onAgreeAllChanged(bool? value) {
+    if (value == null) return;
+    setState(() {
+      _agreeToAll = value;
+      _agreeToTerms = value;
+      _agreeToPrivacy = value;
+      _agreeToMarketing = value; // 선택 항목도 함께 변경
+    });
+  }
+
+  // 개별 체크박스가 변경될 때 '전체 동의' 상태를 업데이트하는 함수
+  void _updateAgreeAllState() {
+    final allChecked = _agreeToTerms && _agreeToPrivacy && _agreeToMarketing;
+    setState(() {
+      _agreeToAll = allChecked;
+    });
   }
 
   // 👇 이름 입력이 변경될 때마다 호출되는 함수
@@ -728,7 +701,7 @@ class _SignupScreenState extends State<SignupScreen> {
       return;
     }
 
-    if (!_agreeToTerms || !_agreeToPrivacy || !_agreeToAge) {
+    if (!_agreeToTerms || !_agreeToPrivacy) {
       _showErrorSnackBar('필수 약관에 동의해주세요.');
       return;
     }
@@ -826,20 +799,67 @@ class _SignupScreenState extends State<SignupScreen> {
               _buildNameField(),
 
               const SizedBox(height: 24),
-              _buildCheckboxRow('약관 약관에 모두 동의합니다.', _agreeToTerms,
-                      (value) => setState(() => _agreeToTerms = value!)),
-              _buildCheckboxRow('이용약관 및 정보 동의 자세히보기', _agreeToPrivacy,
-                      (value) => setState(() => _agreeToPrivacy = value!)),
-              _buildCheckboxRow('개인정보 처리방침 및 수집 동의 자세히보기', _agreeToMarketing,
-                      (value) => setState(() => _agreeToMarketing = value!)),
-              _buildCheckboxRow('만 14세 이상입니다 방침 동의', _agreeToAge,
-                      (value) => setState(() => _agreeToAge = value!)),
+
+              const Divider(),
+              _buildTermRow(
+                text: '전체 동의 (선택 항목 포함)',
+                isHeader: true,
+                value: _agreeToAll,
+                onChanged: _onAgreeAllChanged,
+              ),
+              const Divider(),
+              _buildTermRow(
+                text: '이용약관 동의 (필수)',
+                value: _agreeToTerms,
+                onChanged: (value) {
+                  setState(() => _agreeToTerms = value!);
+                  _updateAgreeAllState();
+                },
+                onViewDetails: () {
+                  Navigator.push(context, MaterialPageRoute(
+                      builder: (context) => const PolicyViewScreen(
+                        title: '이용약관',
+                        content: termsOfServiceContent,
+                      )
+                  ));
+                },
+              ),
+              _buildTermRow(
+                text: '개인정보 처리방침 동의 (필수)',
+                value: _agreeToPrivacy,
+                onChanged: (value) {
+                  setState(() => _agreeToPrivacy = value!);
+                  _updateAgreeAllState();
+                },
+                onViewDetails: () {
+                  Navigator.push(context, MaterialPageRoute(
+                      builder: (context) => const PolicyViewScreen(
+                        title: '개인정보 처리방침',
+                        content: privacyPolicyContent,
+                      )
+                  ));
+                },
+              ),
+              _buildTermRow(
+                text: '마케팅 정보 수신 동의 (선택)',
+                value: _agreeToMarketing,
+                onChanged: (value) {
+                  setState(() => _agreeToMarketing = value!);
+                  _updateAgreeAllState();
+                },
+              ),
               const SizedBox(height: 40),
-              ElevatedButton(
-                onPressed: _isLoading ? null : _handleRegister,
-                child: _isLoading
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text('완료'),
+              SizedBox( // '완료' 버튼
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                  ),
+                  onPressed: _isLoading ? null : _handleRegister,
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text('완료'),
+                ),
               ),
             ],
           ),
@@ -951,11 +971,42 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  Widget _buildCheckboxRow(String text, bool value, ValueChanged<bool?> onChanged) {
+  Widget _buildTermRow({
+    required String text,
+    required bool value,
+    required ValueChanged<bool?> onChanged,
+    VoidCallback? onViewDetails,
+    bool isHeader = false,
+  }) {
     return Row(
       children: [
         Checkbox(value: value, onChanged: onChanged),
-        Expanded(child: Text(text, style: TextStyle(fontSize: 14))),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: isHeader ? 16 : 14,
+              fontWeight: isHeader ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+        if (onViewDetails != null)
+          TextButton(
+            onPressed: onViewDetails,
+            child: Text(
+              '자세히보기',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                decoration: TextDecoration.underline,
+                fontSize: 12,
+              ),
+            ),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
       ],
     );
   }
@@ -1093,9 +1144,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 contentPadding: EdgeInsets.zero,
               ),
               const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: _isLoading ? null : _handleLogin,
-                child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('로그인'),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                  ),
+                  onPressed: _isLoading ? null : _handleLogin,
+                  child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('로그인'),
+                ),
               ),
               const SizedBox(height: 40),
               const Row(
@@ -1109,20 +1166,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 ],
               ),
               const SizedBox(height: 24),
-              _buildSocialLoginButton(
-                provider: 'google',
-                label: 'Google로 로그인',
-                iconPath: 'assets/google.png',
-                backgroundColor: Colors.white,
-                textColor: Colors.black,
-              ),
-              const SizedBox(height: 16),
-              _buildSocialLoginButton(
-                provider: 'kakao',
-                label: 'Kakao로 로그인',
-                iconPath: 'assets/kakao.png',
-                backgroundColor: const Color(0xFFFEE500),
-                textColor: Colors.black,
+              SizedBox(
+                width: double.infinity,
+                child: _buildSocialLoginButton(
+                  provider: 'kakao',
+                  label: 'Kakao로 로그인',
+                  iconPath: 'assets/kakao.png',
+                  backgroundColor: const Color(0xFFFEE500),
+                  textColor: Colors.black,
+                ),
               ),
               const SizedBox(height: 100.0),
             ],
@@ -1142,6 +1194,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return ElevatedButton(
       onPressed: _isLoading ? null : () => _handleSocialLogin(provider),
       style: ElevatedButton.styleFrom(
+        minimumSize: const Size(double.infinity, 50), // 높이 50으로 설정
         backgroundColor: backgroundColor,
         foregroundColor: textColor,
         elevation: 1,
@@ -1988,22 +2041,32 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
   // 외부(HomeScreen)에서도 호출할 수 있도록 함수 이름을 변경
   Future<void> loadHomeData() async {
     try {
-      // [핵심 수정] Future.wait에 사용자 프로필 조회를 추가합니다.
       final results = await Future.wait([
         _apiService.getTodayProgress(),
         _apiService.getVocabularyAnalysis(),
         _apiService.getAttendanceHistory(),
         _apiService.getDailyFeedback(),
-        _apiService.getUserProfile(), // 👈 최신 프로필(학습 목표 포함) 다시 불러오기
+        _apiService.getUserProfile(),
       ]);
 
       if (mounted) {
-        // [핵심 수정] 불러온 최신 프로필 정보로 AppState를 업데이트합니다.
         final userProfile = results[4] as Map<String, dynamic>;
-        AppState.updateFromProfile(userProfile);
-        print('✅ 홈 화면 새로고침 시 AppState가 최신 정보로 업데이트되었습니다.');
 
-        // --- 기존 출석 기록 처리 로직 (그대로 유지) ---
+        // ▼▼▼ [핵심 디버깅 코드] ▼▼▼
+        // API로부터 받은 프로필 데이터 전체를 콘솔에 출력합니다.
+        // learning_goals가 제대로 오는지 여기서 확인할 수 있습니다.
+        print("--- [홈 화면 프로필 데이터] API 응답 ---");
+        print(userProfile);
+        print("------------------------------------");
+
+        // 만약 learning_goals 필드가 null이라면 경고 메시지를 출력합니다.
+        if (userProfile['learning_goals'] == null) {
+          print("⚠️ 경고: API 응답에 'learning_goals' 필드가 없습니다. 목표 설정 UI가 표시됩니다.");
+        }
+        // ▲▲▲ [디버깅 코드 끝] ▲▲▲
+
+        AppState.updateFromProfile(userProfile);
+
         final attendanceHistory = (results[2] as List).map((item) => AttendanceRecord.fromJson(item)).toList();
         final now = DateTime.now();
         final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
@@ -2014,15 +2077,12 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
             attendedDays.add(recordDate.weekday);
           }
         }
-        // --- 여기까지 그대로 유지 ---
 
         setState(() {
           _todayProgress = results[0] as Map<String, int>;
           _vocabAnalysis = results[1] as Map<String, dynamic>;
           _thisWeekAttendedDays = attendedDays;
           _feedbackData = results[3] as Map<String, dynamic>?;
-          // setState가 호출되면서 AppState.learningGoals를 사용하는
-          // _buildProfileSection 위젯이 자동으로 다시 그려집니다.
         });
       }
     } catch (e) {
@@ -2062,26 +2122,9 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
     final userName = AppState.userName;
     final userLevel = AppState.userLevel;
     final learningLanguage = AppState.targetLanguage;
-    final goals = AppState.learningGoals;
+    // AppState에서 learning_goals를 직접 가져옵니다.
+    final Map<String, dynamic>? goalsMap = AppState.learningGoals;
 
-    Map<String, dynamic> timeDistribution = {}; // 1. 빈 Map으로 초기화
-
-    if (goals != null && goals['time_distribution'] != null) {
-      final rawTimeDistribution = goals['time_distribution'];
-
-      // 2. 데이터 타입 확인
-      if (rawTimeDistribution is String) {
-        // 3. 만약 문자열이면, jsonDecode로 파싱하여 Map으로 변환
-        try {
-          timeDistribution = jsonDecode(rawTimeDistribution) as Map<String, dynamic>;
-        } catch(e) {
-          print("time_distribution 문자열 파싱 실패: $e");
-        }
-      } else if (rawTimeDistribution is Map) {
-        // 4. 만약 이미 Map이면, 그대로 사용
-        timeDistribution = rawTimeDistribution as Map<String, dynamic>;
-      }
-    }
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
@@ -2090,7 +2133,6 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
             Expanded(
               flex: 4,
               child: Column(
-                // ... (이 부분은 수정 없음) ...
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(userName ?? AppState.selectedCharacterName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -2129,7 +2171,8 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
             const SizedBox(width: 16),
             Expanded(
               flex: 6,
-              child: goals != null && goals.isNotEmpty
+              // ▼▼▼ [핵심 수정] goalsMap이 null이 아닌지 확인하여 분기 처리 ▼▼▼
+              child: goalsMap != null && goalsMap.isNotEmpty
                   ? Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -2137,30 +2180,28 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
                   const Text("오늘의 목표", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
 
-                  // ▼▼▼ [수정] 아래 if문과 _buildGoalIndicator 위젯의 goal 값을 모두 수정합니다. ▼▼▼
-                  if ((timeDistribution['conversation'] ?? 0) > 0)
-                    _buildGoalIndicator(icon: Icons.chat_bubble_outline, color: Colors.orange, title: '회화', progress: _todayProgress['conversation'] ?? 0, goal: timeDistribution['conversation'] ?? 0, unit: '분'),
+                  // ▼▼▼ [핵심 수정] 키 이름을 API 응답에 맞게 변경 ▼▼▼
+                  if ((goalsMap['conversation_goal'] ?? 0) > 0)
+                    _buildGoalIndicator(icon: Icons.chat_bubble_outline, color: Colors.orange, title: '회화', progress: _todayProgress['conversation'] ?? 0, goal: (goalsMap['conversation_goal'] ?? 0) as int, unit: '분'),
 
-                  if ((timeDistribution['grammar'] ?? 0) > 0) const SizedBox(height: 12),
+                  if ((goalsMap['grammar_goal'] ?? 0) > 0) const SizedBox(height: 12),
 
-                  if ((timeDistribution['grammar'] ?? 0) > 0)
-                    _buildGoalIndicator(icon: Icons.menu_book_outlined, color: Colors.blue, title: '문법', progress: _todayProgress['grammar'] ?? 0, goal: timeDistribution['grammar'] ?? 0, unit: '회'),
+                  if ((goalsMap['grammar_goal'] ?? 0) > 0)
+                    _buildGoalIndicator(icon: Icons.menu_book_outlined, color: Colors.blue, title: '문법', progress: _todayProgress['grammar'] ?? 0, goal: (goalsMap['grammar_goal'] ?? 0) as int, unit: '회'),
 
-                  if ((timeDistribution['pronunciation'] ?? 0) > 0) const SizedBox(height: 12),
+                  if ((goalsMap['pronunciation_goal'] ?? 0) > 0) const SizedBox(height: 12),
 
-                  if ((timeDistribution['pronunciation'] ?? 0) > 0)
-                    _buildGoalIndicator(icon: Icons.mic_none, color: Colors.green, title: '발음', progress: _todayProgress['pronunciation'] ?? 0, goal: timeDistribution['pronunciation'] ?? 0, unit: '회'),
-                  // ▲▲▲ 여기까지 수정 ▲▲▲
+                  if ((goalsMap['pronunciation_goal'] ?? 0) > 0)
+                    _buildGoalIndicator(icon: Icons.mic_none, color: Colors.green, title: '발음', progress: _todayProgress['pronunciation'] ?? 0, goal: (goalsMap['pronunciation_goal'] ?? 0) as int, unit: '회'),
                 ],
               )
                   : Center(
-                // ... (이 부분은 수정 없음) ...
                 child: GestureDetector(
                   onTap: () {
                     final homeScreenState = context.findAncestorStateOfType<_HomeScreenState>();
-                    Navigator.push(context, MaterialPageRoute(builder: (context) => const GoalSettingScreen())).then((newProfile) {
-                      if (newProfile != null && newProfile is Map<String, dynamic>) {
-                        homeScreenState?._updateStateWithProfileData(newProfile);
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => const GoalSettingScreen())).then((result) {
+                      if (result == true) {
+                        homeScreenState?.refreshHomeScreen();
                       }
                     });
                   },
@@ -2306,10 +2347,9 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
                 const Text('어휘 분석', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 Row(
                   children: const [
-                    CircleAvatar(radius: 5, backgroundColor: Colors.green), // 색상 변경
+                    CircleAvatar(radius: 5, backgroundColor: Colors.green),
                     SizedBox(width: 4),
-                    Text('암기율', style: TextStyle(color: Colors.grey)), // 텍스트 변경
-                    Icon(Icons.arrow_forward_ios, color: Colors.grey, size: 16)
+                    Text('암기율', style: TextStyle(color: Colors.grey)),
                   ],
                 )
               ],
@@ -2393,7 +2433,7 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
 
   Widget _buildDayCircle(String day, {bool isChecked = false}) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 2.5),
+      margin: const EdgeInsets.symmetric(horizontal: 2.0),
       width: 28,
       height: 28,
       decoration: BoxDecoration(
@@ -2503,12 +2543,14 @@ class MyInfoDrawer extends StatelessWidget {
             onTap: () async {
               Navigator.pop(context); // Drawer를 먼저 닫습니다.
 
+              // ▼▼▼ [핵심 수정] ▼▼▼
               // GoalSettingScreen으로 이동하고, 결과가 돌아올 때까지 기다립니다.
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const GoalSettingScreen()),
               );
 
+              // 만약 GoalSettingScreen에서 'true' 값을 돌려받았다면, 홈 화면을 새로고침합니다.
               if (result == true) {
                 print("✅ 학습 목표 변경 감지. 홈 화면을 새로고침합니다.");
                 onRefresh();
@@ -2710,6 +2752,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _buildProfileHeader(context, name: userName, email: userEmail),
           const SizedBox(height: 24),
           _buildInfoCard(),
+          Card(
+            margin: const EdgeInsets.only(top: 24),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.history),
+                  title: const Text('포인트 사용 내역'),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: () {
+                    // 2단계에서 만든 PointHistoryScreen으로 이동합니다.
+                    // 이 코드를 인식하려면 파일 상단에 import 문을 추가해야 할 수 있습니다.
+                    // import 'point_history_screen.dart';
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const PointHistoryScreen()),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 24),
           _buildDangerZone(),
         ],
@@ -3473,17 +3537,12 @@ class _WordSearchScreenState extends State<WordSearchScreen> {
   final _searchController = TextEditingController();
   WordData? _foundWord;
   bool _isLoading = false;
-
-  // ▼▼▼ [1/3. 상태 변수 추가] ▼▼▼
-  // 추천 단어 목록을 저장할 리스트
   List<String> _suggestions = [];
-
-  // 과도한 검색을 방지하기 위한 디바운스 타이머
   Timer? _debounce;
 
-  // ▲▲▲ 추가 완료 ▲▲▲
+  // ApiService 인스턴스를 클래스 멤버로 추가합니다.
+  final ApiService _apiService = ApiService();
 
-  // ▼▼▼ [2/3. initState와 dispose 수정] ▼▼▼
   @override
   void initState() {
     super.initState();
@@ -3542,12 +3601,9 @@ class _WordSearchScreenState extends State<WordSearchScreen> {
 
   // 최종 단어 검색을 실행하는 함수 (기존 로직과 거의 동일)
   void _searchWord([String? wordToSearch]) async {
-    // 추천 단어를 탭한 경우 wordToSearch 값이 전달되고,
-    // Enter를 누른 경우 텍스트 필드의 현재 값이 사용됩니다.
     final query = wordToSearch ?? _searchController.text.trim();
     if (query.isEmpty) return;
 
-    // 검색 시작 전 추천 목록을 숨깁니다.
     FocusScope.of(context).unfocus();
     setState(() {
       _isLoading = true;
@@ -3559,37 +3615,24 @@ class _WordSearchScreenState extends State<WordSearchScreen> {
     });
 
     try {
-      String englishWord = query;
-      final isKorean = RegExp(r'[\u3131-\u318E\uAC00-\uD7A3]').hasMatch(query);
-
-      if (isKorean) {
-        final translator = GoogleTranslator();
-        final translation = await translator.translate(
-            query, from: 'ko', to: 'en');
-        englishWord = translation.text.toLowerCase();
-      }
-
-      final apiResult = await fetchWordData(englishWord);
+      // 1. ApiService의 새로운 함수를 호출합니다.
+      final apiResult = await _apiService.searchWordOnline(query);
 
       if (mounted) {
-        if (apiResult != null) {
-          // ▼▼▼ [수정] WordData 객체 생성 시 partOfSpeech 필드를 추가합니다. ▼▼▼
-          _foundWord = WordData(
-            word: apiResult['word'] ?? englishWord,
-            pronunciation: apiResult['pronunciation'] ?? '',
-            partOfSpeech: apiResult['partOfSpeech'] ?? '', // ◀◀◀ [추가]
-            definition: apiResult['koreanMeaning'] ?? '한글 뜻을 찾을 수 없습니다',
-            englishExample: apiResult['englishExample'] ?? '예문 없음',
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("단어 정보를 불러올 수 없습니다.")));
-        }
+        // 2. 백엔드에서 보내준 깔끔한 데이터를 사용하여 WordData 객체를 만듭니다.
+        _foundWord = WordData(
+          word: apiResult['word'] ?? query,
+          pronunciation: apiResult['pronunciation'] ?? '',
+          definition: apiResult['definition'] ?? '뜻을 찾을 수 없습니다.',
+          englishExample: apiResult['english_example'] ?? '예문을 찾을 수 없습니다.',
+        );
       }
     } catch (e) {
       if (mounted) {
+        // ApiException의 메시지를 바로 사용
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("검색 중 오류가 발생했습니다: $e")));
+          SnackBar(content: Text("검색 실패: $e"), backgroundColor: Colors.red),
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -3666,13 +3709,6 @@ class _WordSearchScreenState extends State<WordSearchScreen> {
                         const SizedBox(height: 8),
                         Text(_foundWord!.pronunciation, style: TextStyle(
                             fontSize: 16, color: Colors.grey.shade700)),
-                        if (_foundWord!.partOfSpeech.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            '(${_foundWord!.partOfSpeech})',
-                            style: const TextStyle(fontSize: 16, fontStyle: FontStyle.italic, color: Colors.blue),
-                          ),
-                        ],
                         const Divider(height: 24),
                         const Text('뜻:',
                             style: TextStyle(fontWeight: FontWeight.bold)),
@@ -3783,7 +3819,7 @@ class _WordbookCreateScreenState extends State<WordbookCreateScreen> {
 }
 
 class WordbookDetailScreen extends StatefulWidget {
-  final Wordbook wordbook; // 이제 Wordbook 객체를 받습니다.
+  final Wordbook wordbook;
   const WordbookDetailScreen({Key? key, required this.wordbook}) : super(key: key);
 
   @override
@@ -3792,20 +3828,63 @@ class WordbookDetailScreen extends StatefulWidget {
 
 class _WordbookDetailScreenState extends State<WordbookDetailScreen> {
   final ApiService _apiService = ApiService();
-  late Future<List<UserWord>> _wordsFuture;
+
+  // late Future<List<UserWord>> _wordsFuture; // FutureBuilder를 직접 사용하지 않으므로 변경
   bool _hasChanges = false;
+
+  // ---  검색 기능을 위한 상태 변수 추가 ---
+  final _searchController = TextEditingController();
+  List<UserWord> _allWords = []; // API로부터 받은 모든 단어를 저장
+  List<UserWord> _filteredWords = []; // 검색 결과로 필터링된 단어를 저장
+  bool _isLoading = true; // 로딩 상태 관리
 
   @override
   void initState() {
     super.initState();
     _loadWords();
+    // 검색창에 텍스트가 입력될 때마다 _filterWords 함수 호출
+    _searchController.addListener(_filterWords);
   }
 
-  // 현재 단어장의 단어 목록을 서버에서 다시 불러오는 함수
+  @override
+  void dispose() {
+    _searchController.dispose(); // 컨트롤러 리소스 해제
+    super.dispose();
+  }
+
+  // API로부터 단어를 불러와 상태에 저장하는 함수
   Future<void> _loadWords() async {
+    setState(() => _isLoading = true);
+    try {
+      final details = await _apiService.getWordbookDetails(widget.wordbook.id);
+      final words = (details['words'] as List).map((item) =>
+          UserWord.fromJson(item)).toList();
+      if (mounted) {
+        setState(() {
+          _allWords = words;
+          _filteredWords = words; // 처음에는 모든 단어를 보여줌
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('단어를 불러오지 못했습니다: $e')),
+        );
+      }
+    }
+  }
+
+  // 검색 쿼리에 따라 단어 목록을 필터링하는 함수
+  void _filterWords() {
+    final query = _searchController.text.toLowerCase();
     setState(() {
-      _wordsFuture = _apiService.getWordbookDetails(widget.wordbook.id)
-          .then((data) => (data['words'] as List).map((item) => UserWord.fromJson(item)).toList());
+      _filteredWords = _allWords.where((word) {
+        final wordLower = word.word.toLowerCase();
+        final definitionLower = word.definition.toLowerCase();
+        return wordLower.contains(query) || definitionLower.contains(query);
+      }).toList();
     });
   }
 
@@ -3818,22 +3897,19 @@ class _WordbookDetailScreenState extends State<WordbookDetailScreen> {
 
     if (newWordRaw != null) {
       try {
-        final definitionWithPOS = newWordRaw.partOfSpeech.isNotEmpty
-            ? '(${newWordRaw.partOfSpeech}) ${newWordRaw.definition}'
-            : newWordRaw.definition;
-
         await _apiService.addWordToWordbook(
           wordbookId: widget.wordbook.id,
           word: newWordRaw.word,
-          definition: definitionWithPOS,
+          definition: newWordRaw.definition, // ◀◀ 품사 결합 로직 제거
           pronunciation: newWordRaw.pronunciation,
           englishExample: newWordRaw.englishExample,
         );
 
         _loadWords(); // 추가 성공 후 목록 새로고침
         setState(() => _hasChanges = true);
-      } on ApiException catch(e) {
-        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message), backgroundColor: Colors.red));
+      } on ApiException catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message), backgroundColor: Colors.red));
       }
     }
   }
@@ -3842,49 +3918,47 @@ class _WordbookDetailScreenState extends State<WordbookDetailScreen> {
   Future<void> _showDeleteConfirmDialog(UserWord wordToDelete) async {
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('단어 삭제'),
-        content: Text("'${wordToDelete.word}' 단어를 삭제하시겠습니까?"),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('취소')),
-          TextButton(
-            child: const Text('삭제', style: TextStyle(color: Colors.red)),
-            onPressed: () => Navigator.of(context).pop(true),
+      builder: (context) =>
+          AlertDialog(
+            title: const Text('단어 삭제'),
+            content: Text("'${wordToDelete.word}' 단어를 삭제하시겠습니까?"),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('취소')),
+              TextButton(
+                child: const Text('삭제', style: TextStyle(color: Colors.red)),
+                onPressed: () => Navigator.of(context).pop(true),
+              ),
+            ],
           ),
-        ],
-      ),
     );
 
     if (confirm == true) {
       try {
-        // 1. 단어 삭제 API를 호출합니다.
         await _apiService.deleteWord(wordToDelete.id);
-        // 2. 성공 메시지를 보여줍니다.
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('단어가 삭제되었습니다.')));
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('단어가 삭제되었습니다.')));
         }
-        // 3. 화면을 뒤로 보내는 대신, 현재 화면의 단어 목록을 새로고침합니다.
         _loadWords();
         setState(() => _hasChanges = true);
-      } on ApiException catch(e) {
-        if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('삭제 실패: ${e.message}'), backgroundColor: Colors.red));
+      } on ApiException catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('삭제 실패: ${e.message}'), backgroundColor: Colors.red));
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // ▼▼▼ 2. Scaffold를 WillPopScope로 감싸서 안드로이드 뒤로가기 버튼 제어 ▼▼▼
     return WillPopScope(
       onWillPop: () async {
-        // 뒤로가기 시 _hasChanges 값을 이전 화면으로 전달합니다.
         Navigator.pop(context, _hasChanges);
-        return false; // 시스템의 기본 뒤로가기 동작을 막습니다.
+        return false;
       },
       child: Scaffold(
         appBar: AppBar(
           title: Text(widget.wordbook.name),
-          // ▼▼▼ 3. AppBar의 뒤로가기 버튼도 직접 제어합니다. ▼▼▼
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: () {
@@ -3892,145 +3966,208 @@ class _WordbookDetailScreenState extends State<WordbookDetailScreen> {
             },
           ),
         ),
-        body: FutureBuilder<List<UserWord>>(
-          future: _wordsFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return Center(child: Text('단어를 불러오지 못했습니다: ${snapshot.error}'));
-            }
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return Center(
+        body: Column(
+          children: [
+            // --- 검색창 UI ---
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  hintText: '단어 또는 뜻으로 검색...',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () => _searchController.clear(),
+                  )
+                      : null,
+                ),
+              ),
+            ),
+            // --- 단어 목록 UI ---
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _filteredWords.isEmpty
+                  ? Center(
                 child: Text(
-                  '단어장에 추가된 단어가 없습니다.\n아래 버튼으로 단어를 추가해보세요.',
+                  _searchController.text.isNotEmpty
+                      ? '검색 결과가 없습니다.'
+                      : '단어장에 추가된 단어가 없습니다.\n아래 버튼으로 단어를 추가해보세요.',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
                 ),
-              );
-            }
-
-            final words = snapshot.data!;
-            return RefreshIndicator(
-              onRefresh: _loadWords,
-              child: ListView.builder(
-                padding: const EdgeInsets.fromLTRB(12.0, 12.0, 12.0, 80.0),
-                itemCount: words.length,
-                itemBuilder: (context, index) {
-                  final wordData = words[index];
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-                      leading: IconButton(
-                        iconSize: 28,
-                        padding: EdgeInsets.zero,
-                        icon: Icon(
-                          wordData.isMemorized ? Icons.check_circle : Icons.radio_button_unchecked_sharp,
-                          color: wordData.isMemorized ? Colors.green : Colors.grey,
+              )
+                  : RefreshIndicator(
+                onRefresh: _loadWords,
+                child: ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(12.0, 0, 12.0, 80.0),
+                  itemCount: _filteredWords.length,
+                  itemBuilder: (context, index) {
+                    final wordData = _filteredWords[index];
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                            vertical: 8.0, horizontal: 16.0),
+                        leading: IconButton(
+                          iconSize: 28,
+                          padding: EdgeInsets.zero,
+                          icon: Icon(
+                            wordData.isMemorized ? Icons.check_circle : Icons
+                                .radio_button_unchecked_sharp,
+                            color: wordData.isMemorized ? Colors.green : Colors
+                                .grey,
+                          ),
+                          onPressed: () async {
+                            // UI를 먼저 업데이트하여 즉각적인 반응을 보여줍니다.
+                            setState(() {
+                              wordData.isMemorized = !wordData.isMemorized;
+                              _hasChanges = true;
+                            });
+                            try {
+                              // 서버에 변경사항을 전송합니다.
+                              await _apiService.updateWordMemorizedStatus(
+                                wordId: wordData.id,
+                                isMemorized: wordData.isMemorized,
+                              );
+                            } catch (e) {
+                              // 실패 시 UI를 원래 상태로 되돌립니다.
+                              setState(() =>
+                              wordData.isMemorized = !wordData.isMemorized);
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text("상태 변경에 실패했습니다.")),
+                                );
+                              }
+                            }
+                          },
                         ),
-                        onPressed: () async {
-                          setState(() {
-                            wordData.isMemorized = !wordData.isMemorized;
-                            _hasChanges = true; // 👈 변경 발생 기록
-                          });
-                          try {
-                            await _apiService.updateWordMemorizedStatus(wordId: wordData.id, isMemorized: wordData.isMemorized);
-                          } catch (e) {
-                            setState(() => wordData.isMemorized = !wordData.isMemorized);
-                            if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("상태 변경에 실패했습니다.")));
-                          }
-                        },
-                      ),
-                      title: Text(wordData.word, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 5.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (wordData.pronunciation != null && wordData.pronunciation!.isNotEmpty)
-                              Text(wordData.pronunciation!, style: TextStyle(color: Colors.grey.shade700, fontStyle: FontStyle.italic)),
-                            const SizedBox(height: 3),
-                            Text(wordData.definition, style: const TextStyle(fontSize: 15)),
-                            if (wordData.englishExample != null && wordData.englishExample!.isNotEmpty) ...[
-                              const Divider(height: 16),
-                              Text(wordData.englishExample!, style: TextStyle(color: Colors.grey.shade800, fontStyle: FontStyle.italic)),
+                        title: Text(wordData.word, style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 17)),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 5.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (wordData.pronunciation != null &&
+                                  wordData.pronunciation!.isNotEmpty)
+                                Text(wordData.pronunciation!, style: TextStyle(
+                                    color: Colors.grey.shade700,
+                                    fontStyle: FontStyle.italic)),
+                              const SizedBox(height: 3),
+                              Text(wordData.definition,
+                                  style: const TextStyle(fontSize: 15)),
+                              if (wordData.englishExample != null &&
+                                  wordData.englishExample!.isNotEmpty) ...[
+                                const Divider(height: 16),
+                                Text(wordData.englishExample!, style: TextStyle(
+                                    color: Colors.grey.shade800,
+                                    fontStyle: FontStyle.italic)),
+                              ],
                             ],
+                          ),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                wordData.isFavorite ? Icons.star : Icons
+                                    .star_border,
+                                color: wordData.isFavorite
+                                    ? Colors.amber
+                                    : Colors.grey,
+                              ),
+                              onPressed: () async {
+                                // UI를 먼저 업데이트합니다.
+                                setState(() {
+                                  wordData.isFavorite = !wordData.isFavorite;
+                                  _hasChanges = true;
+                                });
+                                try {
+                                  // 서버에 변경사항을 전송합니다.
+                                  await _apiService.updateWordFavoriteStatus(
+                                    wordId: wordData.id,
+                                    isFavorite: wordData.isFavorite,
+                                  );
+                                } catch (e) {
+                                  // 실패 시 UI를 되돌립니다.
+                                  setState(() =>
+                                  wordData.isFavorite = !wordData.isFavorite);
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text("즐겨찾기 변경에 실패했습니다.")),
+                                    );
+                                  }
+                                }
+                              },
+                            ),
+                            PopupMenuButton<String>(
+                              onSelected: (value) async {
+                                if (value == 'delete') {
+                                  _showDeleteConfirmDialog(wordData);
+                                } else if (value == 'edit') {
+                                  // 수정 화면으로 이동하고, 결과가 돌아올 때까지 기다립니다.
+                                  final result = await Navigator.push<bool>(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          WordEditScreen(word: wordData),
+                                    ),
+                                  );
+                                  // 수정이 성공적으로 완료되었다면(true 반환), 단어 목록을 새로고침합니다.
+                                  if (result == true) {
+                                    _loadWords();
+                                    setState(() => _hasChanges = true);
+                                  }
+                                }
+                              },
+                              itemBuilder: (context) =>
+                              [
+                                const PopupMenuItem<String>(
+                                  value: 'edit',
+                                  child: Row(children: [
+                                    Icon(Icons.edit_outlined),
+                                    SizedBox(width: 8),
+                                    Text('수정')
+                                  ]),
+                                ),
+                                const PopupMenuItem<String>(
+                                  value: 'delete',
+                                  child: Row(children: [
+                                    Icon(Icons.delete_outline,
+                                        color: Colors.red),
+                                    SizedBox(width: 8),
+                                    Text('삭제',
+                                        style: TextStyle(color: Colors.red))
+                                  ]),
+                                ),
+                              ],
+                            ),
                           ],
                         ),
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: Icon(
-                              wordData.isFavorite ? Icons.star : Icons.star_border,
-                              color: wordData.isFavorite ? Colors.amber : Colors.grey,
-                            ),
-                            onPressed: () async {
-                              setState(() {
-                                wordData.isFavorite = !wordData.isFavorite;
-                                _hasChanges = true; // 👈 변경 발생 기록
-                              });
-                              try {
-                                await _apiService.updateWordFavoriteStatus(wordId: wordData.id, isFavorite: wordData.isFavorite);
-                              } catch (e) {
-                                setState(() => wordData.isFavorite = !wordData.isFavorite);
-                              }
-                            },
-                          ),
-                          PopupMenuButton<String>(
-                            onSelected: (value) async {
-                              if (value == 'delete') {
-                                _showDeleteConfirmDialog(wordData);
-                              }
-                              else if (value == 'edit') {
-                                // 1. WordEditScreen으로 이동하고, 결과가 올 때까지 기다립니다.
-                                final result = await Navigator.push<bool>(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => WordEditScreen(word: wordData),
-                                  ),
-                                );
-                                // 2. 만약 수정이 성공적으로 완료되었다면(true 반환),
-                                //    단어 목록을 새로고침합니다.
-                                if (result == true) {
-                                  _loadWords();
-                                  setState(() => _hasChanges = true);
-                                }
-                              }
-                            },
-                            itemBuilder: (context) => [
-                              const PopupMenuItem<String>(
-                                value: 'edit',
-                                child: Row(children: [Icon(Icons.edit_outlined), SizedBox(width: 8), Text('수정')]),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            _createSlideRoute(
+                              WordDetailPagerScreen(
+                                words: _filteredWords,
+                                initialIndex: index,
                               ),
-                              const PopupMenuItem<String>(
-                                value: 'delete',
-                                child: Row(children: [Icon(Icons.delete_outline, color: Colors.red), SizedBox(width: 8), Text('삭제', style: TextStyle(color: Colors.red))]),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          _createSlideRoute(
-                            WordDetailPagerScreen(
-                              words: words,         // 단어장 전체 단어 목록 전달
-                              initialIndex: index,  // 현재 탭한 단어의 인덱스 전달
                             ),
-                          ),
-                        );
-                      },
-                    ),
-                  );
-                },
+                          );
+                        },
+                      ),
+                    );
+                  },
+                ),
               ),
-            );
-          },
+            ),
+          ],
         ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: _navigateAndAddWord,
@@ -4044,7 +4181,7 @@ class _WordbookDetailScreenState extends State<WordbookDetailScreen> {
 
 class FilteredWordsScreen extends StatefulWidget {
   final String title;
-  final String filterStatus; // 'all', 'memorized', 'not_memorized'
+  final String filterStatus;
 
   const FilteredWordsScreen({
     Key? key,
@@ -4058,20 +4195,60 @@ class FilteredWordsScreen extends StatefulWidget {
 
 class _FilteredWordsScreenState extends State<FilteredWordsScreen> {
   final ApiService _apiService = ApiService();
-  late Future<List<UserWord>> _wordsFuture;
+
+  // --- 검색 기능을 위한 상태 변수 추가 ---
+  final _searchController = TextEditingController();
+  List<UserWord> _allWords = [];
+  List<UserWord> _filteredWords = [];
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
     _loadWords();
+    _searchController.addListener(_filterWords);
   }
 
-  void _loadWords() {
-    setState(() {
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  // 단어 로딩 함수
+  Future<void> _loadWords() async {
+    setState(() => _isLoading = true);
+    try {
       final status = widget.filterStatus == 'all' ? null : widget.filterStatus;
-      _wordsFuture = _apiService.getAllWords(status: status).then(
-              (data) => data.map((item) => UserWord.fromJson(item)).toList()
-      );
+      final words = await _apiService.getAllWords(status: status)
+          .then((data) => data.map((item) => UserWord.fromJson(item)).toList());
+
+      if (mounted) {
+        setState(() {
+          _allWords = words;
+          _filteredWords = words;
+          _isLoading = false;
+        });
+      }
+    } catch(e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('단어 로딩 실패: $e')),
+        );
+      }
+    }
+  }
+
+  // 단어 필터링 함수
+  void _filterWords() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      _filteredWords = _allWords.where((word) {
+        final wordLower = word.word.toLowerCase();
+        final definitionLower = word.definition.toLowerCase();
+        return wordLower.contains(query) || definitionLower.contains(query);
+      }).toList();
     });
   }
 
@@ -4083,48 +4260,65 @@ class _FilteredWordsScreenState extends State<FilteredWordsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadWords, // 데이터를 다시 불러오는 함수 호출
+            onPressed: _loadWords,
           ),
         ],
       ),
-      body: FutureBuilder<List<UserWord>>(
-        future: _wordsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(child: Text('오류: ${snapshot.error}'));
-          }
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('표시할 단어가 없습니다.'));
-          }
-
-          final words = snapshot.data!;
-          return RefreshIndicator(
-            onRefresh: () async => _loadWords(),
-            child: ListView.builder(
-              padding: const EdgeInsets.all(12.0),
-              itemCount: words.length,
-              itemBuilder: (context, index) {
-                final wordData = words[index];
-                // 단어 표시 UI는 WordbookDetailScreen과 유사하게 구성
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-                    leading: Icon(
-                      wordData.isMemorized ? Icons.check_circle : Icons.radio_button_unchecked_sharp,
-                      color: wordData.isMemorized ? Colors.green : Colors.grey,
-                    ),
-                    title: Text(wordData.word, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text(wordData.definition),
-                  ),
-                );
-              },
+      body: Column(
+        children: [
+          // --- 검색창 UI 추가 ---
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: '단어 또는 뜻으로 검색...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () => _searchController.clear(),
+                )
+                    : null,
+              ),
             ),
-          );
-        },
+          ),
+          // --- 단어 목록 UI ---
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _filteredWords.isEmpty
+                ? Center(
+              child: Text(
+                _searchController.text.isNotEmpty
+                    ? '검색 결과가 없습니다.'
+                    : '표시할 단어가 없습니다.',
+              ),
+            )
+                : RefreshIndicator(
+              onRefresh: _loadWords,
+              child: ListView.builder(
+                padding: const EdgeInsets.fromLTRB(12.0, 0, 12.0, 12.0),
+                itemCount: _filteredWords.length, // 필터링된 리스트 사용
+                itemBuilder: (context, index) {
+                  final wordData = _filteredWords[index]; // 필터링된 리스트 사용
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+                      leading: Icon(
+                        wordData.isMemorized ? Icons.check_circle : Icons.radio_button_unchecked_sharp,
+                        color: wordData.isMemorized ? Colors.green : Colors.grey,
+                      ),
+                      title: Text(wordData.word, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text(wordData.definition),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -5045,16 +5239,26 @@ class _SituationScreenState extends State<SituationScreen> with AutomaticKeepAli
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    // ▼▼▼ [핵심 추가 1/2] 화면의 전체 너비를 가져옵니다. ▼▼▼
+    final screenWidth = MediaQuery
+        .of(context)
+        .size
+        .width;
+    // 화면 너비의 특정 비율로 글자 크기를 계산합니다. (값은 조절 가능)
+    // clamp를 사용해 글자가 너무 커지거나 작아지는 것을 방지합니다.
+    final titleFontSize = (screenWidth / 18).clamp(20.0, 36.0);
+
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
         children: [
           const SizedBox(height: 20),
-          const Text(
+          Text(
             '공부하고 싶은 상황을\n선택해주세요',
             textAlign: TextAlign.center,
+            // ▼▼▼ [핵심 추가 2/2] 고정된 크기 대신 계산된 글자 크기를 적용합니다. ▼▼▼
             style: TextStyle(
-              fontSize: 22,
+              fontSize: titleFontSize, // 적용!
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -5064,25 +5268,22 @@ class _SituationScreenState extends State<SituationScreen> with AutomaticKeepAli
               crossAxisCount: 2,
               crossAxisSpacing: 16,
               mainAxisSpacing: 16,
-              // ▼▼▼ [수정] 2. Map 데이터를 기반으로 버튼 목록을 동적으로 생성합니다. ▼▼▼
               children: _situationApiKeys.keys.map((String situationName) {
-                // '공항', '식당' ...
                 final String apiKey = _situationApiKeys[situationName]!;
                 final String imagePath = _situationImagePaths[situationName]!;
                 final IconData fallbackIcon = _situationFallbackIcons[situationName]!;
 
                 return _buildSituationButton(
                   context,
-                  situation: situationName, // UI에 표시될 이름 (예: '공항')
+                  situation: situationName,
                   imagePath: imagePath,
                   fallbackIcon: fallbackIcon,
                   onTap: () {
-                    print('선택: $situationName, API Key: $apiKey'); // 디버깅 로그
-                    // ▼▼▼ [수정] 3. ConversationScreen으로 이동할 때 한글 이름이 아닌 '영어 API 키'를 전달합니다. ▼▼▼
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => ConversationScreen(situation: apiKey),
+                        builder: (context) =>
+                            ConversationScreen(situation: apiKey),
                       ),
                     );
                   },
@@ -5102,45 +5303,56 @@ class _SituationScreenState extends State<SituationScreen> with AutomaticKeepAli
     IconData? fallbackIcon,
     required VoidCallback onTap,
   }) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (imagePath != null)
-              Image.asset(
-                imagePath,
-                width: 80,
-                height: 80,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return Icon(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 아이콘 크기 계산 (이전과 동일)
+        final double iconSize = constraints.maxWidth * 0.5;
+        // ▼▼▼ [핵심 추가 1/2] 버튼 너비에 비례하여 글자 크기를 계산합니다. ▼▼▼
+        final double buttonFontSize = (constraints.maxWidth / 10).clamp(
+            16.0, 24.0);
+
+        return Card(
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (imagePath != null)
+                  Image.asset(
+                    imagePath,
+                    width: iconSize,
+                    height: iconSize,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Icon(
+                        fallbackIcon ?? Icons.help_outline,
+                        size: iconSize * 0.8,
+                        color: Colors.green,
+                      );
+                    },
+                  )
+                else
+                  Icon(
                     fallbackIcon ?? Icons.help_outline,
-                    size: 60,
+                    size: iconSize * 0.8,
                     color: Colors.green,
-                  );
-                },
-              )
-            else
-              Icon(
-                fallbackIcon ?? Icons.help_outline,
-                size: 60,
-                color: Colors.green,
-              ),
-            const SizedBox(height: 12),
-            Text(
-              situation,
-              style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
+                  ),
+                const SizedBox(height: 12),
+                Text(
+                  situation,
+                  // ▼▼▼ [핵심 추가 2/2] 계산된 글자 크기를 적용합니다. ▼▼▼
+                  style: TextStyle(
+                    fontSize: buttonFontSize, // 적용!
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -7978,54 +8190,34 @@ class _GoalSettingScreenState extends State<GoalSettingScreen> {
   bool _isLoading = true; // 데이터를 불러오는 중인지 여부
   int? _existingPlanId; // 기존 계획의 ID를 저장할 변수
 
-  double _sessionDuration = 30.0;
-  final Map<String, bool> _preferredStyles = {
-    'conversation': true,
-    'grammar': false,
-    'pronunciation': false,
-  };
-
-  final Map<String, String> _styleTranslations = {
-    'conversation': '회화',
-    'grammar': '문법',
-    'pronunciation': '발음',
-  };
+  double _conversationDuration = 30.0;
+  double _grammarCount = 3.0;
+  double _pronunciationCount = 3.0;
 
   @override
   void initState() {
     super.initState();
-    // 화면이 시작될 때 기존 학습 계획을 불러오는 함수 호출
     _loadExistingPlan();
   }
 
   // 기존 학습 계획을 불러와 UI에 반영하는 함수
   Future<void> _loadExistingPlan() async {
     try {
-      // 최신 학습 계획을 서버에서 가져옵니다.
-      // 이 함수는 계획이 없으면 (404 오류) 알아서 null을 반환합니다.
       final latestPlan = await _apiService.getLatestLearningPlan();
 
-      // 기존 계획이 있다면, 해당 데이터로 UI 상태를 업데이트합니다.
       if (latestPlan != null && mounted) {
         setState(() {
           _existingPlanId = latestPlan['id'];
-          _sessionDuration = (latestPlan['total_session_duration'] as int).toDouble();
-
           final Map<String, dynamic> timeDistribution = latestPlan['time_distribution'];
-          _preferredStyles.forEach((key, value) {
-            _preferredStyles[key] = (timeDistribution[key] ?? 0) > 0;
-          });
+
+          _conversationDuration = (timeDistribution['conversation'] ?? 30).toDouble();
+          _grammarCount = (timeDistribution['grammar'] ?? 3).toDouble();
+          _pronunciationCount = (timeDistribution['pronunciation'] ?? 3).toDouble();
         });
       }
     } catch (e) {
-      // [핵심] 404 뿐만 아니라 모든 종류의 오류를 여기서 처리합니다.
-      // 신규 사용자는 학습 계획이 없는 것이 정상이므로,
-      // 계획을 불러오다 어떤 오류가 발생하든 문제 삼지 않고 그냥 넘어갑니다.
       print("기존 학습 계획 없음 (또는 로드 중 오류 발생): $e");
-      // 사용자에게 별도의 오류 메시지를 보여주지 않습니다.
     } finally {
-      // try 블록이 성공하든, catch 블록에서 오류를 잡든, 항상 마지막에 실행됩니다.
-      // 로딩 상태를 false로 변경하여 화면을 정상적으로 표시합니다.
       if (mounted) {
         setState(() => _isLoading = false);
       }
@@ -8036,47 +8228,32 @@ class _GoalSettingScreenState extends State<GoalSettingScreen> {
   Future<void> _saveGoal() async {
     setState(() => _isLoading = true);
 
-    final selectedStyles = _preferredStyles.entries
-        .where((entry) => entry.value)
-        .map((entry) => entry.key)
-        .toList();
-
-    if (selectedStyles.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('선호 학습 방식을 하나 이상 선택해주세요.'), backgroundColor: Colors.red),
-      );
-      setState(() => _isLoading = false);
-      return;
-    }
-
     try {
       if (_existingPlanId != null) {
         // --- 수정 로직 ---
         await _apiService.updateLearningPlan(
           planId: _existingPlanId!,
-          sessionDuration: _sessionDuration.toInt(),
-          preferredStyles: selectedStyles,
+          conversationDuration: _conversationDuration.toInt(),
+          grammarCount: _grammarCount.toInt(),
+          pronunciationCount: _pronunciationCount.toInt(),
         );
       } else {
         // --- 생성 로직 ---
         await _apiService.createLearningPlan(
-          sessionDuration: _sessionDuration.toInt(),
-          preferredStyles: selectedStyles,
+          conversationDuration: _conversationDuration.toInt(),
+          grammarCount: _grammarCount.toInt(),
+          pronunciationCount: _pronunciationCount.toInt(),
         );
       }
 
-      // [핵심] 생성/수정 성공 후 AppState를 갱신할 필요 없이,
-      // 이전 화면으로 돌아가 그곳에서 새로고침을 하도록 신호만 보냅니다.
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('학습 목표가 성공적으로 저장되었습니다!')),
         );
 
         if (Navigator.canPop(context)) {
-          // 돌아갈 화면이 있다면(기존 유저) -> 'true'를 반환하여 새로고침 유도
           Navigator.pop(context, true);
         } else {
-          // 돌아갈 화면이 없다면(신규 유저) -> 다음 단계로 이동
           Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute(builder: (context) => CharacterSelectionScreen()),
@@ -8104,29 +8281,20 @@ class _GoalSettingScreenState extends State<GoalSettingScreen> {
           : ListView(
         padding: const EdgeInsets.all(24.0),
         children: [
-          // ▼▼▼ [수정] 이 OutlinedButton.icon 위젯 전체를 아래 코드로 교체해주세요. ▼▼▼
           OutlinedButton.icon(
             icon: const Icon(Icons.auto_awesome),
             label: const Text('추천 플랜에서 선택하기'),
-            // ▼▼▼ [수정] 이 onPressed 부분을 아래 코드로 교체합니다. ▼▼▼
             onPressed: () async {
-              // 1. 추천 플랜 화면으로 이동하고, 결과를 기다립니다.
               final newProfile = await Navigator.push<Map<String, dynamic>>(
                 context,
                 MaterialPageRoute(builder: (context) => const PlanTemplateScreen()),
               );
 
               if (newProfile != null && mounted) {
-                // 2. AppState를 최신 정보로 업데이트합니다.
                 AppState.updateFromProfile(newProfile);
-                print('✅ AppState가 추천 플랜의 새 정보로 업데이트되었습니다.');
-
-                // 3. [핵심 분기 로직] 이전 화면으로 돌아갈 수 있는지 확인합니다.
                 if (Navigator.canPop(context)) {
-                  // 돌아갈 화면이 있다면 (기존 유저) -> 'true' 값을 가지고 돌아가 새로고침을 유도합니다.
                   Navigator.pop(context, true);
                 } else {
-                  // 돌아갈 화면이 없다면 (신규 유저) -> 다음 가입 단계인 '캐릭터 선택'으로 이동합니다.
                   Navigator.pushAndRemoveUntil(
                     context,
                     MaterialPageRoute(builder: (context) => CharacterSelectionScreen()),
@@ -8153,14 +8321,33 @@ class _GoalSettingScreenState extends State<GoalSettingScreen> {
           const SizedBox(height: 16),
 
           const Center(child: Text("직접 목표 설정하기", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-          const SizedBox(height: 16),
-          _buildSliderSection('1회 학습 시간 (분)', _sessionDuration, (val) => setState(() => _sessionDuration = val), min: 10, max: 120, divisions: 11),
+          const SizedBox(height: 24),
+
+          // ▼▼▼ [수정] UI를 3개의 개별 슬라이더로 변경 ▼▼▼
+          _buildSliderSection(
+              '회화 학습 시간 (분)',
+              _conversationDuration,
+                  (val) => setState(() => _conversationDuration = val),
+              min: 0, max: 120, divisions: 12
+          ),
           const Divider(height: 40),
-          _buildStyleSection(),
+          _buildSliderSection(
+              '문법 연습 횟수 (회)',
+              _grammarCount,
+                  (val) => setState(() => _grammarCount = val),
+              min: 0, max: 20, divisions: 20
+          ),
+          const Divider(height: 40),
+          _buildSliderSection(
+              '발음 연습 횟수 (회)',
+              _pronunciationCount,
+                  (val) => setState(() => _pronunciationCount = val),
+              min: 0, max: 20, divisions: 20
+          ),
           const SizedBox(height: 40),
+
           ElevatedButton(
             onPressed: _saveGoal,
-            // 기존 계획이 있는지 여부에 따라 버튼 텍스트 변경
             child: Text(_existingPlanId != null ? '학습 목표 수정하기' : '학습 목표 저장하기'),
           ),
         ],
@@ -8175,24 +8362,6 @@ class _GoalSettingScreenState extends State<GoalSettingScreen> {
       children: [
         Text('$title: ${value.toInt()}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         Slider(value: value, min: min, max: max, divisions: divisions, label: value.toInt().toString(), onChanged: onChanged),
-      ],
-    );
-  }
-
-  Widget _buildStyleSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('선호 학습 방식 (1개 이상 선택)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-        // _preferredStyles의 key를 순회하며 CheckboxListTile을 만듭니다.
-        ..._preferredStyles.keys.map((styleKey) {
-          return CheckboxListTile(
-            // title에 key 대신, 위에서 만든 _styleTranslations Map을 이용해 한글 텍스트를 표시합니다.
-            title: Text(_styleTranslations[styleKey] ?? styleKey),
-            value: _preferredStyles[styleKey],
-            onChanged: (val) => setState(() => _preferredStyles[styleKey] = val!),
-          );
-        }).toList(),
       ],
     );
   }
@@ -9050,11 +9219,17 @@ class _CharacterSelectionScreenState extends State<CharacterSelectionScreen> {
                 ),
               ),
               const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: _isLoading ? null : _saveAndNavigate, // 통합된 함수 호출
-                child: _isLoading
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : Text(widget.isFromSettings ? '변경 완료' : '선택 완료'),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                  ),
+                  onPressed: _isLoading ? null : _saveAndNavigate, // 통합된 함수 호출
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : Text(widget.isFromSettings ? '변경 완료' : '선택 완료'),
+                ),
               ),
             ],
           ),
@@ -13101,5 +13276,228 @@ class _IncorrectGrammarHistoryScreenState extends State<IncorrectGrammarHistoryS
       spans.add(TextSpan(text: text.substring(start)));
     }
     return spans;
+  }
+}
+
+class PolicyViewScreen extends StatelessWidget {
+  final String title;
+  final String content;
+
+  const PolicyViewScreen({
+    super.key,
+    required this.title,
+    required this.content,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Text(content, style: const TextStyle(fontSize: 15, height: 1.5)),
+      ),
+    );
+  }
+}
+
+// 약관 내용 예시 텍스트 (실제 서비스에서는 전체 내용을 채워야 합니다)
+const String termsOfServiceContent = """
+제1장 총칙
+
+제1조 (목적)
+이 약관은 Learning App(이하 "회사")가 제공하는 다국어 언어 학습 애플리케이션 및 관련 제반 서비스(이하 "서비스")의 이용과 관련하여 회사와 회원과의 권리, 의무 및 책임사항, 기타 필요한 사항을 규정함을 목적으로 합니다.
+
+제2조 (정의)
+이 약관에서 사용하는 용어의 정의는 다음과 같습니다.
+1. "서비스"라 함은 구현되는 단말기(PC, TV, 휴대형단말기 등의 각종 유무선 장치를 포함)와 상관없이 "회원"이 이용할 수 있는 다국어 언어 학습 관련 제반 서비스를 의미합니다.
+2. "회원"이라 함은 회사의 "서비스"에 접속하여 이 약관에 따라 "회사"와 이용계약을 체결하고 "회사"가 제공하는 "서비스"를 이용하는 고객을 말합니다.
+3. "아이디(ID)"라 함은 "회원"의 식별과 "서비스" 이용을 위하여 "회원"이 정하고 "회사"가 승인하는 문자와 숫자의 조합을 의미합니다.
+4. "비밀번호"라 함은 "회원"이 부여 받은 "아이디"와 일치되는 "회원"임을 확인하고 비밀보호를 위해 "회원" 자신이 정한 문자 또는 숫자의 조합을 의미합니다.
+5. "게시물"이라 함은 "회원"이 "서비스"를 이용함에 있어 "서비스상"에 게시한 부호ㆍ문자ㆍ음성ㆍ화상 또는 동영상 등의 정보 형태의 글, 사진, 동영상 및 각종 파일과 링크 등을 의미합니다.
+
+제3조 (약관의 게시와 개정)
+1. "회사"는 이 약관의 내용을 "회원"이 쉽게 알 수 있도록 서비스 초기 화면에 게시합니다.
+2. "회사"는 "약관의규제에관한법률", "정보통신망이용촉진및정보보호등에관한법률(이하 "정보통신망법")" 등 관련법을 위배하지 않는 범위에서 이 약관을 개정할 수 있습니다.
+3. "회사"가 약관을 개정할 경우에는 적용일자 및 개정사유를 명시하여 현행약관과 함께 제1항의 방식에 따라 그 개정약관의 적용일자 7일 전부터 적용일자 전일까지 공지합니다. 다만, 회원에게 불리한 약관의 개정의 경우에는 공지 외에 일정기간 서비스 내 전자우편, 전자쪽지, 로그인시 동의창 등의 전자적 수단을 통해 따로 명확히 통지하도록 합니다.
+4. 회사가 전항에 따라 개정약관을 공지 또는 통지하면서 회원에게 7일 기간 내에 의사표시를 하지 않으면 의사표시가 표명된 것으로 본다는 뜻을 명확하게 공지 또는 통지하였음에도 회원이 명시적으로 거부의 의사표시를 하지 아니한 경우 회원이 개정약관에 동의한 것으로 봅니다.
+5. 회원이 개정약관의 적용에 동의하지 않는 경우 회사는 개정 약관의 내용을 적용할 수 없으며, 이 경우 회원은 이용계약을 해지할 수 있습니다.
+
+제2장 서비스 이용
+
+제4조 (서비스의 제공 등)
+1. 회사는 회원에게 아래와 같은 서비스를 제공합니다.
+   가. 다국어 학습 콘텐츠 제공 서비스
+   나. 발음 교정 및 문법 연습 서비스
+   다. 커뮤니티 서비스 (게시판, 스터디 그룹 등)
+   라. 기타 "회사"가 추가 개발하거나 다른 회사와의 제휴계약 등을 통해 "회원"에게 제공하는 일체의 서비스
+2. 회사는 컴퓨터 등 정보통신설비의 보수점검, 교체 및 고장, 통신두절 또는 운영상 상당한 이유가 있는 경우 서비스의 제공을 일시적으로 중단할 수 있습니다.
+
+제5조 (회원의 의무)
+1. 회원은 다음 행위를 하여서는 안 됩니다.
+   가. 신청 또는 변경 시 허위내용의 등록
+   나. 타인의 정보도용
+   다. 회사가 게시한 정보의 변경
+   라. 다른 회원의 개인정보 및 계정정보를 수집하는 행위
+   마. 회사의 동의 없이 영리를 목적으로 서비스를 사용하는 행위
+   바. 기타 불법적이거나 부당한 행위
+
+제6조 (게시물의 저작권)
+1. "회원"이 "서비스" 내에 게시한 "게시물"의 저작권은 해당 "게시물"의 저작자에게 귀속됩니다.
+2. "회원"이 "서비스" 내에 게시하는 "게시물"은 검색결과 내지 "서비스" 및 관련 프로모션 등에 노출될 수 있으며, 해당 노출을 위해 필요한 범위 내에서는 일부 수정, 복제, 편집되어 게시될 수 있습니다. 이 경우, 회사는 저작권법 규정을 준수하며, "회원"은 언제든지 고객센터 또는 "서비스" 내 관리기능을 통해 해당 "게시물"에 대해 삭제, 검색결과 제외, 비공개 등의 조치를 취할 수 있습니다.
+
+제3장 계약 해지 및 이용 제한
+
+제7조 (회원 탈퇴 및 자격 상실 등)
+1. 회원은 회사에 언제든지 탈퇴를 요청할 수 있으며 회사는 즉시 회원탈퇴를 처리합니다.
+2. 회원이 다음 각호의 사유에 해당하는 경우, 회사는 회원자격을 제한 및 정지시킬 수 있습니다.
+   가. 가입 신청 시에 허위 내용을 등록한 경우
+   나. 다른 사람의 서비스 이용을 방해하거나 그 정보를 도용하는 등 전자상거래 질서를 위협하는 경우
+   다. 서비스를 이용하여 법령 또는 이 약관이 금지하거나 공서양속에 반하는 행위를 하는 경우
+
+제4장 기타
+
+제8조 (면책조항)
+1. 회사는 천재지변 또는 이에 준하는 불가항력으로 인하여 서비스를 제공할 수 없는 경우에는 서비스 제공에 관한 책임이 면제됩니다.
+2. 회사는 회원의 귀책사유로 인한 서비스 이용의 장애에 대하여는 책임을 지지 않습니다.
+
+제9조 (준거법 및 재판관할)
+1. 회사와 회원 간 제기된 소송은 대한민국법을 준거법으로 합니다.
+2. 회사와 회원간 발생한 분쟁에 관한 소송은 민사소송법 상의 관할법원에 제소합니다.
+
+부칙
+1. 이 약관은 2025년 10월 17일부터 적용됩니다.
+""";
+
+// ▼▼▼ [수정] 개인정보 처리방침 전체 내용 ▼▼▼
+const String privacyPolicyContent = """
+Learning App(이하 '회사'라 한다)는 개인정보보호법을 준수하며, 관련 법령에 의거한 개인정보처리방침을 정하여 이용자 권익 보호에 최선을 다하고 있습니다.
+
+제1조 (개인정보의 처리 목적)
+회사는 다음의 목적을 위하여 개인정보를 처리합니다. 처리하고 있는 개인정보는 다음의 목적 이외의 용도로는 이용되지 않으며, 이용 목적이 변경되는 경우에는 개인정보 보호법 제18조에 따라 별도의 동의를 받는 등 필요한 조치를 이행할 예정입니다.
+1. 회원 가입 및 관리: 회원 가입의사 확인, 회원제 서비스 제공에 따른 본인 식별·인증, 회원자격 유지·관리, 서비스 부정이용 방지, 만 14세 미만 아동의 개인정보 처리 시 법정대리인의 동의여부 확인, 각종 고지·통지, 고충처리 등을 목적으로 개인정보를 처리합니다.
+2. 서비스 제공: 학습 콘텐츠 제공, 맞춤 서비스 제공, 본인인증, 연령인증, 요금 결제·정산 등을 목적으로 개인정보를 처리합니다.
+3. 마케팅 및 광고에의 활용: 신규 서비스(제품) 개발 및 맞춤 서비스 제공, 이벤트 및 광고성 정보 제공 및 참여기회 제공, 인구통계학적 특성에 따른 서비스 제공 및 광고 게재, 접속빈도 파악 또는 회원의 서비스 이용에 대한 통계 등을 목적으로 개인정보를 처리합니다.
+
+제2조 (처리하는 개인정보의 항목)
+회사는 다음의 개인정보 항목을 처리하고 있습니다.
+1. 필수항목: 이메일, 비밀번호, 이름(닉네임)
+2. 선택항목: 프로필 사진, 학습 목표, 학습 언어 등
+3. 자동수집항목: 서비스 이용 기록, 접속 로그, 쿠키, 접속 IP 정보
+
+제3조 (개인정보의 처리 및 보유 기간)
+① 회사는 법령에 따른 개인정보 보유·이용기간 또는 정보주체로부터 개인정보를 수집 시에 동의 받은 개인정보 보유·이용기간 내에서 개인정보를 처리·보유합니다.
+② 각각의 개인정보 처리 및 보유 기간은 다음과 같습니다.
+1. 회원 가입 및 관리: 회원 탈퇴 시까지. 다만, 다음의 사유에 해당하는 경우에는 해당 사유 종료 시까지
+   - 관계 법령 위반에 따른 수사·조사 등이 진행 중인 경우에는 해당 수사·조사 종료 시까지
+   - 서비스 이용에 따른 채권·채무관계 잔존 시에는 해당 채권·채무관계 정산 시까지
+2. 재화 또는 서비스 제공: 재화·서비스 공급완료 및 요금결제·정산 완료 시까지
+
+제4조 (개인정보의 파기)
+① 회사는 개인정보 보유기간의 경과, 처리목적 달성 등 개인정보가 불필요하게 되었을 때에는 지체없이 해당 개인정보를 파기합니다.
+② 정보주체로부터 동의받은 개인정보 보유기간이 경과하거나 처리목적이 달성되었음에도 불구하고 다른 법령에 따라 개인정보를 계속 보존하여야 하는 경우에는, 해당 개인정보를 별도의 데이터베이스(DB)로 옮기거나 보관장소를 달리하여 보존합니다.
+③ 개인정보 파기의 절차 및 방법은 다음과 같습니다.
+1. 파기절차: 회사는 파기 사유가 발생한 개인정보를 선정하고, 회사의 개인정보 보호책임자의 승인을 받아 개인정보를 파기합니다.
+2. 파기방법: 전자적 파일 형태의 정보는 기록을 재생할 수 없는 기술적 방법을 사용하며, 종이에 출력된 개인정보는 분쇄기로 분쇄하거나 소각을 통하여 파기합니다.
+
+제5조 (정보주체와 법정대리인의 권리·의무 및 그 행사방법)
+정보주체는 회사에 대해 언제든지 개인정보 열람, 정정, 삭제, 처리정지 요구 등의 권리를 행사할 수 있습니다.
+
+제6조 (개인정보 보호책임자)
+① 회사는 개인정보 처리에 관한 업무를 총괄해서 책임지고, 개인정보 처리와 관련한 정보주체의 불만처리 및 피해구제 등을 위하여 아래와 같이 개인정보 보호책임자를 지정하고 있습니다.
+- 성명: OOO
+- 직책: OOO
+- 연락처: XXXX-XXXX
+② 정보주체께서는 회사의 서비스(또는 사업)을 이용하시면서 발생한 모든 개인정보 보호 관련 문의, 불만처리, 피해구제 등에 관한 사항을 개인정보 보호책임자 및 담당부서로 문의하실 수 있습니다.
+
+제7조 (개인정보 처리방침의 변경)
+이 개인정보처리방침은 시행일로부터 적용되며, 법령 및 방침에 따른 변경내용의 추가, 삭제 및 정정이 있는 경우에는 변경사항의 시행 7일 전부터 공지사항을 통하여 고지할 것입니다.
+
+시행일자: 2025년 10월 17일
+""";
+
+class PointHistoryScreen extends StatefulWidget {
+  const PointHistoryScreen({super.key});
+
+  @override
+  State<PointHistoryScreen> createState() => _PointHistoryScreenState();
+}
+
+class _PointHistoryScreenState extends State<PointHistoryScreen> {
+  final ApiService _apiService = ApiService();
+  late Future<List<PointTransaction>> _historyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  void _loadHistory() {
+    setState(() {
+      _historyFuture = _apiService.getPointHistory();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('포인트 사용 내역'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadHistory,
+          ),
+        ],
+      ),
+      body: FutureBuilder<List<PointTransaction>>(
+        future: _historyFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text('내역을 불러오는 데 실패했습니다: ${snapshot.error}'));
+          }
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text('포인트 사용 내역이 없습니다.'));
+          }
+
+          final transactions = snapshot.data!;
+          return RefreshIndicator(
+            onRefresh: () async => _loadHistory(),
+            child: ListView.builder(
+              itemCount: transactions.length,
+              itemBuilder: (context, index) {
+                final trans = transactions[index];
+                final isUsage = trans.amount < 0; // 포인트 사용 여부
+                return ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: isUsage ? Colors.blue.shade100 : Colors.green.shade100,
+                    child: Icon(
+                      isUsage ? Icons.arrow_downward : Icons.arrow_upward,
+                      color: isUsage ? Colors.blue.shade700 : Colors.green.shade700,
+                    ),
+                  ),
+                  title: Text(trans.reason),
+                  subtitle: Text('${trans.createdAt.toLocal()}'.substring(0, 16)),
+                  trailing: Text(
+                    '${isUsage ? '' : '+'}${trans.amount} P',
+                    style: TextStyle(
+                      color: isUsage ? Colors.blue.shade700 : Colors.green.shade700,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
   }
 }
