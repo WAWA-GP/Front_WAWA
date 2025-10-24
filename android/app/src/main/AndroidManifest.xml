@@ -16,40 +16,17 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
-            <!-- Main Launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- Deep Links -->
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
-
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <!-- Accepts URIs that begin with packageID, oauth -->
-                <data android:scheme="com.example.graduation" android:host="oauth"/>
-
+                <data android:scheme="${appAuthRedirectScheme}" />
             </intent-filter>
-
-            <!-- Deep Link for Supabase OAuth -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-
-                <!-- 한 줄로 통합 -->
-                <data
-                    android:scheme="io.supabase.wawa"
-                    android:host="auth"
-                    android:pathPrefix="/callback"/>
-            </intent-filter>
-
         </activity>
         <meta-data
             android:name="flutterEmbedding"

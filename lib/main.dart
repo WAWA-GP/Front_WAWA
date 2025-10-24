@@ -53,6 +53,43 @@ Route _createSlideRoute(Widget page) {
   );
 }
 
+// --- 1. 상품 정보를 담을 데이터 모델 클래스 ---
+class ExchangeItem {
+  final String brand;
+  final String name;
+  final int cost;
+  final String imagePath; // 상품 이미지 경로
+
+  const ExchangeItem({
+    required this.brand,
+    required this.name,
+    required this.cost,
+    required this.imagePath,
+  });
+}
+
+// --- 2. 카테고리별 상품 목업 데이터 ---
+// 실제 앱에서는 이 데이터를 서버 API를 통해 받아와야 합니다.
+final Map<String, List<ExchangeItem>> categoryItems = {
+  '편의점': const [
+    ExchangeItem(brand: 'CU', name: '모바일상품권 5천원권', cost: 7000, imagePath: 'assets/item_cu_5000.png'),
+    ExchangeItem(brand: 'CU', name: 'HK)헛개컨디션병', cost: 7000, imagePath: 'assets/item_condition.png'),
+    ExchangeItem(brand: 'CU', name: '그래)끼리)808렌', cost: 7700, imagePath: 'assets/item_kiri.png'),
+    ExchangeItem(brand: 'CU', name: '빙그레)투게더', cost: 9800, imagePath: 'assets/item_together.png'),
+    ExchangeItem(brand: 'GS25', name: '비타500', cost: 1500, imagePath: 'assets/item_vita500.png'),
+    ExchangeItem(brand: '세븐일레븐', name: '바나나맛우유', cost: 2000, imagePath: 'assets/item_banana_milk.png'),
+  ],
+  '카페/베이커리': const [
+    ExchangeItem(brand: '스타벅스', name: '아메리카노 T', cost: 5740, imagePath: 'assets/item_starbucks_americano.png'),
+    ExchangeItem(brand: '스타벅스', name: '카페 라떼 T', cost: 6440, imagePath: 'assets/item_starbucks_latte.png'),
+    ExchangeItem(brand: '파리바게뜨', name: '1만원 금액권', cost: 12000, imagePath: 'assets/item_paris.png'),
+  ],
+  '이마트몰': [],
+  '외식': [],
+  '뷰티': [],
+  '문화생활': [],
+};
+
 // 1. 데이터 모델 클래스 (수정 없음)
 class WordData {
   final String word;
@@ -1881,6 +1918,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   // HomePageContent를 직접 제어하기 위한 GlobalKey
   final GlobalKey<_HomePageContentState> _homePageKey = GlobalKey<_HomePageContentState>();
+  final GlobalKey<_StudyScreenState> _studyScreenKey = GlobalKey<_StudyScreenState>();
 
   @override
   void initState() {
@@ -1933,7 +1971,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         onNavigate: refreshHomeScreen,
       ),
       VocabularyScreen(),
-      StudyScreen(),
+      StudyScreen(key: _studyScreenKey),
       SituationScreen(),
       CommunityScreen(tabController: _communityTabController),
     ];
@@ -1991,7 +2029,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 );
               },
             ),
-          ]
+          ],
+          if (_selectedIndex == 2)
+            IconButton(
+              tooltip: '새로고침',
+              icon: const Icon(Icons.refresh),
+              onPressed: () {
+                // GlobalKey를 통해 StudyScreen의 새로고침 함수를 호출합니다.
+                _studyScreenKey.currentState?.refreshCurrentTab();
+              },
+            ),
         ],
       ),
       body: IndexedStack(index: _selectedIndex, children: _pages),
@@ -4306,12 +4353,20 @@ class _FilteredWordsScreenState extends State<FilteredWordsScreen> {
                     margin: const EdgeInsets.only(bottom: 12),
                     child: ListTile(
                       contentPadding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-                      leading: Icon(
-                        wordData.isMemorized ? Icons.check_circle : Icons.radio_button_unchecked_sharp,
-                        color: wordData.isMemorized ? Colors.green : Colors.grey,
-                      ),
                       title: Text(wordData.word, style: const TextStyle(fontWeight: FontWeight.bold)),
                       subtitle: Text(wordData.definition),
+                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          _createSlideRoute(
+                            WordDetailPagerScreen(
+                              words: _filteredWords, // 현재 필터링된 목록 전체를 전달
+                              initialIndex: index,     // 탭한 단어의 순번을 전달
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   );
                 },
@@ -4334,6 +4389,8 @@ class StudyScreen extends StatefulWidget {
 // ▼▼▼ [MODIFY] Change the _StudyScreenState class ▼▼▼
 class _StudyScreenState extends State<StudyScreen> with TickerProviderStateMixin {
   late TabController _tabController;
+  final GlobalKey<_PronunciationPracticeTabState> _pronunciationKey = GlobalKey();
+  final GlobalKey<_GrammarPracticeScreenState> _grammarKey = GlobalKey();
 
   @override
   void initState() {
@@ -4345,6 +4402,17 @@ class _StudyScreenState extends State<StudyScreen> with TickerProviderStateMixin
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  void refreshCurrentTab() {
+    // 현재 선택된 탭 인덱스를 확인
+    if (_tabController.index == 0) {
+      // '발음 연습' 탭의 새로고침 함수 호출
+      _pronunciationKey.currentState?.refresh();
+    } else if (_tabController.index == 1) {
+      // '문법 연습' 탭의 새로고침 함수 호출
+      _grammarKey.currentState?.refresh();
+    }
   }
 
   @override
@@ -4362,10 +4430,8 @@ class _StudyScreenState extends State<StudyScreen> with TickerProviderStateMixin
           child: TabBarView(
             controller: _tabController,
             children: [
-              // Pronunciation Practice Tab
-              PronunciationPracticeTab(),
-              // Grammar Practice Tab
-              GrammarPracticeScreen(),
+              PronunciationPracticeTab(key: _pronunciationKey),
+              GrammarPracticeScreen(key: _grammarKey),
             ],
           ),
         ),
@@ -4375,6 +4441,7 @@ class _StudyScreenState extends State<StudyScreen> with TickerProviderStateMixin
 }
 
 class PronunciationPracticeTab extends StatefulWidget {
+  const PronunciationPracticeTab({super.key});
   @override
   _PronunciationPracticeTabState createState() => _PronunciationPracticeTabState();
 }
@@ -4409,8 +4476,11 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
   @override
   void initState() {
     super.initState();
-    _initRecorderAndPlayer();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _changeToNextSentence());
+    // 위젯이 완전히 빌드된 후에 권한을 요청하도록 변경
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initRecorderAndPlayer();
+      _changeToNextSentence();
+    });
   }
 
   @override
@@ -4418,6 +4488,14 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
     _recorder.closeRecorder();
     _player.closePlayer();
     super.dispose();
+  }
+
+  void refresh() {
+    // 기존의 '다른 문장' 버튼 로직을 재사용합니다.
+    _changeToNextSentence();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('새로운 문장을 불러왔습니다.'), duration: Duration(seconds: 1)),
+    );
   }
 
   void _changeToNextSentence() {
@@ -4470,6 +4548,9 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
 
       if (path != null) {
         final audioFile = File(path);
+        final fileSize = await audioFile.length();
+        print('🎤 녹음된 파일 경로: $path');
+        print('💾 녹음된 파일 크기: $fileSize 바이트');
         // [핵심 수정] 녹음 파일의 유효성 검사를 더 강화합니다.
         // 파일 크기 기준을 2KB에서 4KB로 상향 조정하여 짧은 노이즈 등을 필터링합니다.
         if (await audioFile.exists() && await audioFile.length() > 4096) {
@@ -4927,6 +5008,7 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
 
 // ▼▼▼ [ADD NEW WIDGET] Add the new grammar practice screen widget ▼▼▼
 class GrammarPracticeScreen extends StatefulWidget {
+  const GrammarPracticeScreen({super.key});
   @override
   _GrammarPracticeScreenState createState() => _GrammarPracticeScreenState();
 }
@@ -4957,6 +5039,14 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
   void initState() {
     super.initState();
     _startSession();
+  }
+
+  void refresh() {
+    // 새로운 문제 세션을 시작하는 함수를 호출합니다.
+    _startSession();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('새로운 문제 세션을 시작합니다.'), duration: Duration(seconds: 1)),
+    );
   }
 
   // 세션을 시작하고 첫 문제를 받아오는 함수
@@ -7822,9 +7912,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     // 3. 앱의 전역 상태(AppState)에도 최종 반영합니다.
                     AppState.beginnerMode = value;
                     if (mounted) {
+                      // ▼▼▼ [수정된 부분] ▼▼▼
+                      // value가 true이면 '설정', false이면 '해제' 메시지를 선택
+                      final message = value ? '초보자 모드가 설정되었습니다.' : '초보자 모드가 해제되었습니다.';
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('초보자 모드가 설정되었습니다.')),
+                        SnackBar(content: Text(message)),
                       );
+                      // ▲▲▲ [수정된 부분] ▲▲▲
                     }
                   } catch (e) {
                     // 4. 만약 서버 저장이 실패하면, UI를 원래 상태로 되돌립니다.
@@ -12924,11 +13018,13 @@ class _PointExchangeScreenState extends State<PointExchangeScreen> {
   bool _isLoading = false;
 
   // 교환 가능한 아이템 목록 (임시 데이터)
-  final List<PointItem> _items = const [
-    PointItem(name: '커피 기프티콘', description: '아메리카노 기프티콘 1개를 얻습니다.', cost: 5000),
-    PointItem(name: '아이스크림 기프티콘', description: '파인트 아이스크림 기프티콘 1개를 얻습니다.', cost: 10000),
-    PointItem(name: '치킨 기프티콘', description: '후라이드 치킨 기프티콘 1개를 얻습니다.', cost: 15000),
-    PointItem(name: '배달 기프티콘', description: '5만원권 1개를 얻습니다.', cost: 20000),
+  final List<Map<String, dynamic>> _categories = [
+    {'name': '카페/베이커리', 'icon': Icons.local_cafe_outlined, 'image': 'assets/cafe.png'}, // 이미지가 있으면 이미지 사용
+    {'name': '이마트몰', 'icon': Icons.shopping_cart_outlined, 'image': null}, // 이미지가 없으면 아이콘 사용
+    {'name': '외식', 'icon': Icons.restaurant_outlined, 'image': 'assets/dining.png'},
+    {'name': '편의점', 'icon': Icons.storefront_outlined, 'image': 'assets/convenience.png'},
+    {'name': '뷰티', 'icon': Icons.face_retouching_natural_outlined, 'image': 'assets/beauty.png'},
+    {'name': '문화생활', 'icon': Icons.theaters_outlined, 'image': 'assets/culture.png'},
   ];
 
   @override
@@ -13029,26 +13125,141 @@ class _PointExchangeScreenState extends State<PointExchangeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('포인트 교환소'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16.0),
+            child: Center(
+              child: ValueListenableBuilder<int>(
+                valueListenable: AppState.points,
+                builder: (context, currentPoints, child) {
+                  // P 동그라미와 숫자를 가로로 배열하기 위해 Row 사용
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.center, // 세로 중앙 정렬
+                    children: [
+                      // 'P'를 담을 동그란 컨테이너
+                      Container(
+                        width: 24, // 동그라미 크기
+                        height: 24,
+                        decoration: const BoxDecoration(
+                          color: Colors.green, // 초록색 배경
+                          shape: BoxShape.circle, // 원형 모양
+                        ),
+                        child: const Center(
+                          child: Text(
+                            'P',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                              color: Colors.white, // 흰색 글자
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8), // 동그라미와 숫자 사이 간격
+                      // 포인트 숫자 텍스트
+                      Text(
+                        '$currentPoints',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Colors.black, // 검은색 글자
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
       body: Stack(
         children: [
-          ListView(
+          // --- 카테고리 그리드 UI ---
+          Padding(
             padding: const EdgeInsets.all(16.0),
-            children: [
-              // 현재 보유 포인트 표시 카드
-              _buildPointBalanceCard(),
-              const SizedBox(height: 24),
-              // 교환 아이템 목록
-              ..._items.map((item) => _buildItemCard(item)),
-            ],
+            child: GridView.builder(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2, // 한 줄에 2개씩
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+                childAspectRatio: 1.0, // 정사각형 비율
+              ),
+              itemCount: _categories.length,
+              itemBuilder: (context, index) {
+                final category = _categories[index];
+                return _buildCategoryCard(
+                  name: category['name'],
+                  icon: category['icon'],
+                  imagePath: category['image'],
+                  onTap: () {
+                    // 해당 카테고리의 아이템 목록을 가져옵니다.
+                    final items = categoryItems[category['name']] ?? [];
+
+                    // 새로운 화면(PointCategoryItemsScreen)으로 이동합니다.
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => PointCategoryItemsScreen(
+                          categoryName: category['name'],
+                          items: items,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
           ),
-          // 로딩 중일 때 화면 전체에 로딩 인디케이터 표시
+          // --- 로딩 오버레이 ---
           if (_isLoading)
             Container(
               color: Colors.black.withOpacity(0.3),
               child: const Center(child: CircularProgressIndicator()),
             ),
         ],
+      ),
+    );
+  }
+
+// --- 새 위젯: 카테고리 카드 ---
+  Widget _buildCategoryCard({
+    required String name,
+    required IconData icon,
+    String? imagePath, // 이미지 경로 (선택 사항)
+    required VoidCallback onTap,
+  }) {
+    return Card(
+      clipBehavior: Clip.antiAlias, // InkWell 효과가 Card 밖으로 나가지 않도록
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // 이미지가 있으면 이미지를, 없으면 아이콘을 표시
+            imagePath != null
+                ? Image.asset(
+              imagePath,
+              height: 60, // 이미지 크기 조절
+              width: 60,
+              fit: BoxFit.contain, // 이미지가 잘리지 않도록
+              errorBuilder: (context, error, stackTrace) {
+                // 이미지 로딩 실패 시 아이콘 표시
+                return Icon(icon, size: 50, color: Colors.green.shade700);
+              },
+            )
+                : Icon(icon, size: 50, color: Colors.green.shade700),
+            const SizedBox(height: 12),
+            Text(
+              name,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -13497,6 +13708,243 @@ class _PointHistoryScreenState extends State<PointHistoryScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+// --- 카테고리별 상품 목록 화면 ---
+class PointCategoryItemsScreen extends StatefulWidget {
+  final String categoryName;
+  final List<ExchangeItem> items;
+
+  const PointCategoryItemsScreen({
+    super.key,
+    required this.categoryName,
+    required this.items,
+  });
+
+  @override
+  State<PointCategoryItemsScreen> createState() => _PointCategoryItemsScreenState();
+}
+
+class _PointCategoryItemsScreenState extends State<PointCategoryItemsScreen> {
+  late List<String> _brands;
+  String? _selectedBrand;
+
+  @override
+  void initState() {
+    super.initState();
+    // 상품 목록에서 중복되지 않는 브랜드 목록을 추출합니다.
+    _brands = widget.items.map((item) => item.brand).toSet().toList();
+    if (_brands.isNotEmpty) {
+      _selectedBrand = _brands.first;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 선택된 브랜드의 상품만 필터링합니다.
+    final filteredItems = _selectedBrand == null
+        ? widget.items
+        : widget.items.where((item) => item.brand == _selectedBrand).toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.categoryName),
+      ),
+      body: Column(
+        children: [
+          // 브랜드 필터 버튼 UI
+          if (_brands.length > 1)
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Wrap(
+                  spacing: 8.0,
+                  children: _brands.map((brand) {
+                    final isSelected = brand == _selectedBrand;
+                    return ChoiceChip(
+                      label: Text(brand),
+                      selected: isSelected,
+                      onSelected: (selected) {
+                        if (selected) {
+                          setState(() => _selectedBrand = brand);
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          // 상품 목록 UI
+          Expanded(
+            child: filteredItems.isEmpty
+                ? const Center(child: Text('이 카테고리에는 상품이 없습니다.'))
+                : ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              itemCount: filteredItems.length,
+              itemBuilder: (context, index) {
+                final item = filteredItems[index];
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.all(12),
+                    leading: Image.asset(
+                      item.imagePath,
+                      width: 60,
+                      height: 60,
+                      fit: BoxFit.contain,
+                      errorBuilder: (c, e, s) => Container(
+                        width: 60,
+                        height: 60,
+                        color: Colors.grey.shade100,
+                        child: Icon(Icons.image_not_supported, color: Colors.grey.shade400),
+                      ),
+                    ),
+                    title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text(item.brand),
+                    trailing: Text(
+                      '${item.cost} P',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: Colors.green,
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => PointItemDetailScreen(item: item),
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+// --- 상품 상세 정보 및 교환 화면 ---
+class PointItemDetailScreen extends StatefulWidget {
+  final ExchangeItem item;
+
+  const PointItemDetailScreen({super.key, required this.item});
+
+  @override
+  State<PointItemDetailScreen> createState() => _PointItemDetailScreenState();
+}
+
+class _PointItemDetailScreenState extends State<PointItemDetailScreen> {
+  final ApiService _apiService = ApiService();
+  bool _isLoading = false;
+
+  Future<void> _handleExchange() async {
+    if (AppState.points.value < widget.item.cost) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('⚠️ 포인트가 부족합니다.'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    final bool? confirm = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('상품 교환'),
+        content: Text("'${widget.item.name}' 상품을\n${widget.item.cost} 포인트로 교환하시겠습니까?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('교환')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final response = await _apiService.executePointTransaction(
+        amount: -widget.item.cost, // 포인트 사용은 음수
+        reason: "상품 교환: ${widget.item.name}",
+      );
+
+      if (mounted) {
+        final newPoints = response['final_points'] as int?;
+        if (newPoints != null) {
+          AppState.points.value = newPoints; // AppState의 포인트 업데이트
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('✅ 교환 완료! 남은 포인트: $newPoints P')),
+          );
+          Navigator.pop(context); // 교환 성공 후 상세 화면 닫기
+        }
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('오류: ${e.message}'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canAfford = AppState.points.value >= widget.item.cost;
+
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.item.name)),
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Column(
+                children: [
+                  Image.asset(
+                    widget.item.imagePath,
+                    height: 200,
+                    fit: BoxFit.contain,
+                    errorBuilder: (c, e, s) => Container(
+                      height: 200,
+                      color: Colors.grey.shade100,
+                      child: Icon(Icons.image_not_supported, size: 80, color: Colors.grey.shade400),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(widget.item.brand, style: TextStyle(color: Colors.grey.shade600)),
+                  const SizedBox(height: 8),
+                  Text(widget.item.name, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                  const SizedBox(height: 24),
+                  Text(
+                    '${widget.item.cost} P',
+                    style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.green),
+                  ),
+                ],
+              ),
+            ),
+            ElevatedButton(
+              onPressed: canAfford && !_isLoading ? _handleExchange : null,
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 50),
+              ),
+              child: _isLoading
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Text('교환하기'),
+            ),
+          ],
+        ),
       ),
     );
   }
