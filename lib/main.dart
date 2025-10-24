@@ -4508,6 +4508,7 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
       _analysisResult = null;
       _audioPath = null;
       _errorMessage = null;
+      _pronunciationSessionId = null;
     });
   }
 
@@ -5031,6 +5032,8 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
   bool _isCorrect = false;
   String? _explanation;
   TestQuestion? _nextQuestion; // 다음 문제를 미리 받아두기 위한 변수
+  int? _currentHistoryId;
+  bool _isCurrentFavorite = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -5047,6 +5050,34 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('새로운 문제 세션을 시작합니다.'), duration: Duration(seconds: 1)),
     );
+  }
+
+  Future<void> _toggleFavorite() async {
+    if (_currentHistoryId == null) return;
+    final newStatus = !_isCurrentFavorite;
+
+    // UI를 먼저 낙관적으로 업데이트합니다.
+    setState(() {
+      _isCurrentFavorite = newStatus;
+    });
+
+    try {
+      // 서버에 변경된 즐겨찾기 상태를 전송합니다.
+      await _apiService.updateGrammarFavoriteStatus(
+        historyId: _currentHistoryId!,
+        isFavorite: newStatus,
+      );
+    } catch (e) {
+      // 만약 API 호출이 실패하면 UI를 원래 상태로 되돌립니다.
+      if (mounted) {
+        setState(() {
+          _isCurrentFavorite = !newStatus;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('즐겨찾기 변경에 실패했습니다.'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   // 세션을 시작하고 첫 문제를 받아오는 함수
@@ -5101,14 +5132,14 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
           final bool isCorrect = response['is_correct'] ?? false;
 
           // [핵심 수정] isCorrect 값을 history 저장 API로 넘겨줍니다.
-          await _apiService.addGrammarHistory(
+          final historyResponse = await _apiService.addGrammarHistory(
             transcribedText: transcribedTextForHistory,
             correctedText: correctedTextForHistory,
             grammarFeedback: grammarFeedback,
             vocabularySuggestions: [],
-            isCorrect: isCorrect, // <-- [추가]
+            isCorrect: response['is_correct'] ?? false,
           );
-          print("✅ 객관식 문법 학습 이력이 성공적으로 저장되었습니다.");
+          print("✅ 객관식 문법 학습 이력이 성공적으로 저장되었습니다. ID: ${historyResponse['id']}");
 
         } catch (e) {
           print("❌ 문법 학습 이력 저장 실패: $e");
@@ -5125,6 +5156,8 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
           _nextQuestion = TestQuestion.fromJson(response['next_question']);
           _showFeedback = true;
           _isLoading = false;
+          _currentHistoryId = historyResponse['id'];
+          _isCurrentFavorite = historyResponse['is_favorite'] ?? false;
         });
 
       } else {
@@ -5142,6 +5175,8 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
       _nextQuestion = null;
       _selectedAnswer = null;
       _showFeedback = false;
+      _currentHistoryId = null;
+      _isCurrentFavorite = false;
     });
   }
 
@@ -5225,10 +5260,31 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
           children: [
             const Text('다음 빈칸에 들어갈 가장 알맞은 것을 고르세요.', style: TextStyle(fontSize: 16, color: Colors.grey)),
             const SizedBox(height: 20),
-            Text(
-              question.text,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 문제 텍스트가 남는 공간을 모두 차지하도록 Expanded로 감쌉니다.
+                Expanded(
+                  child: Text(
+                    question.text,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                // 즐겨찾기 아이콘 버튼
+                IconButton(
+                  // _currentHistoryId가 있을 때(답변 제출 후)만 _toggleFavorite 함수를 연결
+                  onPressed: _currentHistoryId != null ? _toggleFavorite : null,
+                  icon: Icon(
+                    _isCurrentFavorite ? Icons.star : Icons.star_border,
+                    // _currentHistoryId가 없으면(답변 제출 전) 비활성화된 회색으로 표시
+                    color: _currentHistoryId != null
+                        ? (_isCurrentFavorite ? Colors.amber : Colors.grey)
+                        : Colors.grey.shade300,
+                    size: 28,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 24),
             // 선택지 목록
@@ -5266,12 +5322,14 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
                   size: 28,
                 ),
                 const SizedBox(width: 12),
-                Text(
-                  _isCorrect ? '정답입니다!' : '틀렸습니다',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: _isCorrect ? Colors.green : Colors.red,
+                Expanded( // 👈 Expanded로 감싸서 아이콘이 오른쪽 끝으로 가도록 함
+                  child: Text(
+                    _isCorrect ? '정답입니다!' : '틀렸습니다',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: _isCorrect ? Colors.green : Colors.red,
+                    ),
                   ),
                 ),
               ],

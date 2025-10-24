@@ -49,12 +49,12 @@ class ApiService {
   // --- 기본 설정 ---
   static const String _authPlanStatsBaseUrl = String.fromEnvironment(
       'BACKEND_URL',
-      defaultValue: 'http://10.0.0.2:8001'
+      defaultValue: 'http://15.165.13addGrammarHistory6.44:8001'
   );
 
   static const String _aiBaseUrl = String.fromEnvironment(
       'AI_BACKEND_URL',
-      defaultValue: 'http://10.0.2.2:8000'
+      defaultValue: 'http://15.165.136.44:8000'
   );
 
   static const Duration _timeoutDuration = Duration(seconds: 30);
@@ -1377,12 +1377,12 @@ class ApiService {
   }
 
   // 문법 연습 결과(이력) 저장
-  Future<void> addGrammarHistory({
+  Future<Map<String, dynamic>> addGrammarHistory({ // 👈 1. void를 Future<Map<String, dynamic>>으로 변경
     required String transcribedText,
     required String correctedText,
     required List<String> grammarFeedback,
     required List<String> vocabularySuggestions,
-    required bool isCorrect, // <-- [추가]
+    required bool isCorrect,
   }) async {
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/grammar/history/add');
     final headers = await _getAuthHeaders();
@@ -1392,11 +1392,11 @@ class ApiService {
       'corrected_text': correctedText,
       'grammar_feedback': grammarFeedback,
       'vocabulary_suggestions': vocabularySuggestions,
-      'is_correct': isCorrect, // <-- [추가]
+      'is_correct': isCorrect,
     });
 
     final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
-    _processResponse(response);
+    return _processResponse(response); // 👈 2. 이 줄을 추가하여 서버 응답을 반환
   }
 
   // 문법 즐겨찾기 상태 업데이트
