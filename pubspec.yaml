@@ -24,8 +24,11 @@ dependencies:
   uuid: ^4.5.1
   flutter_tts: ^4.2.3
   timeago: ^3.7.1
+  image_picker: ^1.0.4
   url_launcher: ^6.2.6
   app_links: ^6.1.1
+  flutter_localizations:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +61,24 @@ flutter:
     - assets/tatoeba_eng_50k.txt
     - assets/google.png
     - assets/kakao.png
+    - assets/item_starbucks_americano.png
+    - assets/item_banana_milk.png
+    - assets/item_bhc_ppuring.png
+    - assets/item_cgv_movie.png
+    - assets/item_condition.png
+    - assets/item_cu_5000.png
+    - assets/item_domino_potato.png
+    - assets/item_emart_10000.png
+    - assets/item_emart_30000.png
+    - assets/item_megabox_movie.png
+    - assets/item_momstouch_thigh.png
+    - assets/item_olive_10000.png
+    - assets/item_olive_30000.png
+    - assets/item_paris.png
+    - assets/item_starbucks_latte.png
+    - assets/item_together.png
+    - assets/item_twosome_cake.png
+    - assets/item_vita500.png
 
 flutter_launcher_icons:
   android: true

@@ -9,6 +9,7 @@ import 'package:learning_app/models/user_profile.dart';
 import 'package:learning_app/models/statistics_model.dart';
 import 'package:learning_app/models/study_group_model.dart';
 import 'package:learning_app/models/pronunciation_history_model.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:learning_app/main.dart';
 import 'package:uuid/uuid.dart' show Uuid;
 import 'package:url_launcher/url_launcher.dart';
@@ -49,7 +50,7 @@ class ApiService {
   // --- 기본 설정 ---
   static const String _authPlanStatsBaseUrl = String.fromEnvironment(
       'BACKEND_URL',
-      defaultValue: 'http://15.165.13addGrammarHistory6.44:8001'
+      defaultValue: 'http://15.165.136.44:8001'
   );
 
   static const String _aiBaseUrl = String.fromEnvironment(
@@ -1039,42 +1040,31 @@ class ApiService {
   }
 
   // 중복 닉네임 검사
-  Future<bool> checkNameAvailability(String name) async {
+  Future<Map<String, dynamic>> checkNameAvailability(String name) async {
+    // 이름이 비어있으면 API를 호출하지 않고 즉시 클라이언트에서 처리
+    if (name.trim().isEmpty) {
+      return {'available': false};
+    }
+
     final url = Uri.parse('$_authPlanStatsBaseUrl/auth/check-name');
     final headers = {'Content-Type': 'application/json; charset=UTF-8'};
+    final requestBody = jsonEncode({'name': name});
 
     try {
-      // ✅ 디버그 로그 추가
-      final requestBody = jsonEncode({'name': name});
-      print('DEBUG: Request URL: $url');
-      print('DEBUG: Request body: $requestBody');
-
       final response = await http.post(
         url,
         headers: headers,
         body: requestBody,
       ).timeout(_timeoutDuration);
 
-      print('DEBUG: Response status: ${response.statusCode}');
-      print('DEBUG: Response body: ${response.body}');
+      // _processResponse가 성공(2xx) 시 body를 반환하고,
+      // 실패(4xx, 5xx) 시 ApiException을 발생시킵니다.
+      return _processResponse(response);
 
-      if (response.statusCode == 200) {
-        final responseBody = jsonDecode(utf8.decode(response.bodyBytes));
-        return responseBody['available'] ?? false;
-      } else if (response.statusCode == 409) {
-        return false;
-      } else if (response.statusCode == 400) {
-        // ✅ 400 에러 시 상세 로그
-        print('DEBUG: Bad Request - ${response.body}');
-        return false;
-      }
-      return false;
     } catch (e) {
-      print('DEBUG: Exception: $e');
-      if (e is ApiException && e.statusCode == 409) {
-        return false;
-      }
-      throw ApiException('이름 확인 중 오류가 발생했습니다.');
+      // ApiException이 아닌 네트워크 오류 등 다른 예외를 다시 throw
+      // UI단에서 "이름 확인 중 오류가 발생했습니다." 메시지를 보여줄 수 있습니다.
+      rethrow;
     }
   }
 
@@ -1786,5 +1776,157 @@ class ApiService {
       // 네트워크 오류 등
       throw ApiException('포인트 내역을 불러오는 중 오류가 발생했습니다.');
     }
+  }
+
+  Future<void> toggleGrammarQuestionFavorite({
+    required String questionId,
+    required bool isFavorite,
+    String? question, // [추가]
+    Map<String, String>? options, // [추가]
+  }) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/grammar/questions/$questionId/favorite');
+    final headers = await _getAuthHeaders();
+    if (!headers.containsKey('Authorization')) throw ApiException('로그인이 필요합니다.');
+
+    final body = json.encode({
+      'is_favorite': isFavorite,
+      'question': question, // [추가]
+      'options': options,   // [추가]
+    });
+
+    final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
+    _processResponse(response);
+  }
+
+  Future<List<TestQuestion>> getFavoriteGrammarQuestions() async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/grammar/questions/favorites');
+    final headers = await _getAuthHeaders();
+    final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
+    final List<dynamic> data = _processResponse(response);
+    return data.map((item) => TestQuestion.fromJson(item)).toList();
+  }
+
+  Future<LearningProgress> getTodayLearningProgress() async {
+    // 1단계에서 새로 만든 엔드포인트 주소
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/statistics/today-progress-detailed');
+    final headers = await _getAuthHeaders();
+    if (!headers.containsKey('Authorization')) throw ApiException('로그인이 필요합니다.');
+
+    final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
+    final responseBody = _processResponse(response);
+
+    // 기존 LearningProgress 모델을 그대로 재활용
+    return LearningProgress.fromJson(responseBody);
+  }
+
+  Future<Map<String, dynamic>> submitChallengeProof({
+    required int challengeId,
+    String? content,
+    XFile? imageFile,
+  }) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/challenges/$challengeId/submit');
+    final headers = await _getAuthHeaders();
+
+    String? imageBase64;
+    if (imageFile != null) {
+      final imageBytes = await imageFile.readAsBytes();
+      imageBase64 = base64Encode(imageBytes);
+    }
+
+    final body = jsonEncode({
+      'proof_content': content,
+      'proof_image_base64': imageBase64,
+    });
+
+    final response = await http.post(url, headers: headers, body: body).timeout(const Duration(seconds: 60)); // 이미지 업로드를 위해 타임아웃 60초
+    return _processResponse(response);
+  }
+
+  Future<ChallengeSubmission?> getMyChallengeSubmission(int challengeId) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/challenges/$challengeId/my-submission');
+    final headers = await _getAuthHeaders();
+    final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
+
+    // 204 No Content는 데이터가 아예 없는 경우이므로 null 반환 (기존 로직 유지)
+    if (response.statusCode == 204) {
+      return null;
+    }
+
+    final data = _processResponse(response);
+
+    // ✨ [핵심 수정]
+    // 서버가 200 OK와 함께 null 본문을 보냈을 경우를 확인합니다.
+    if (data == null) {
+      return null;
+    }
+
+    // data가 null이 아닐 때만 fromJson을 실행합니다.
+    return ChallengeSubmission.fromJson(data);
+  }
+
+  Future<ChallengeSubmission> updateChallengeSubmission({
+    required int submissionId,
+    String? content,
+    XFile? imageFile,
+  }) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/submissions/$submissionId');
+    final headers = await _getAuthHeaders();
+
+    String? imageBase64;
+    if (imageFile != null) {
+      imageBase64 = base64Encode(await imageFile.readAsBytes());
+    }
+
+    final body = jsonEncode({
+      'proof_content': content,
+      'proof_image_base64': imageBase64,
+    });
+
+    final response = await http.put(url, headers: headers, body: body).timeout(const Duration(seconds: 60));
+    final data = _processResponse(response);
+
+    // ✨ [핵심 수정]
+    // 서버가 submission 객체를 직접 반환하므로, data['submission'] 대신 data를 바로 사용합니다.
+    return ChallengeSubmission.fromJson(data);
+  }
+
+  // ▼▼▼ [신규] 챌린지 인증 삭제 함수 ▼▼▼
+  Future<void> deleteChallengeSubmission(int submissionId) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/submissions/$submissionId');
+    final headers = await _getAuthHeaders();
+    final response = await http.delete(url, headers: headers).timeout(_timeoutDuration);
+
+    if (response.statusCode == 204) {
+      return; // 성공
+    }
+    _processResponse(response); // 실패 시 예외 발생
+  }
+
+  Future<List<ChallengeSubmission>> getChallengeSubmissions(int challengeId) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/challenges/$challengeId/submissions');
+    final headers = await _getAuthHeaders();
+    final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
+    final List<dynamic> data = _processResponse(response);
+    return data.map((item) => ChallengeSubmission.fromJson(item)).toList();
+  }
+
+  // ▼▼▼ [신규] 챌린지 인증 처리 (승인/거절) ▼▼▼
+  Future<Map<String, dynamic>> processChallengeSubmission({
+    required int submissionId,
+    required String status, // "approved" 또는 "rejected"
+  }) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/submissions/$submissionId/process?status=$status');
+    final headers = await _getAuthHeaders();
+    final response = await http.post(url, headers: headers).timeout(_timeoutDuration);
+    return _processResponse(response);
+  }
+
+  Future<List<ChallengeParticipant>> getChallengeParticipants(int challengeId) async {
+    final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/challenges/$challengeId/participants');
+    // 이 API는 인증이 필요 없다고 가정 (필요 시 _getAuthHeaders() 사용)
+    final headers = {'Content-Type': 'application/json; charset=UTF-8'};
+    final response = await http.get(url, headers: headers).timeout(_timeoutDuration);
+    final List<dynamic> data = _processResponse(response);
+    return data.map((item) => ChallengeParticipant.fromJson(item)).toList();
   }
 }
