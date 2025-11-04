@@ -13375,6 +13375,8 @@ class _ChallengeCreateScreenState extends State<ChallengeCreateScreen> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _durationController = TextEditingController(text: '7');
+  final _typeController = TextEditingController(text: 'conversation');
+  final _targetValueController = TextEditingController(text: '10');
 
   bool _isLoading = false;
   final ApiService _apiService = ApiService();
@@ -13398,14 +13400,18 @@ class _ChallengeCreateScreenState extends State<ChallengeCreateScreen> {
         title: _titleController.text,
         description: _descriptionController.text,
         durationDays: int.parse(_durationController.text),
+        challengeType: _typeController.text,
+        targetValue: int.parse(_targetValueController.text),
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('새로운 챌린지가 생성되었습니다!')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('새로운 챌린지가 생성되었습니다!')));
         Navigator.pop(context, true);
       }
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('오류: ${e.message}'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('오류: ${e.message}'), backgroundColor: Colors.red));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -13423,30 +13429,58 @@ class _ChallengeCreateScreenState extends State<ChallengeCreateScreen> {
           children: [
             TextFormField(
               controller: _titleController,
-              decoration: const InputDecoration(labelText: '챌린지 목표 *', hintText: '예: 자막 없이 영화 한 편 보기'),
+              decoration: const InputDecoration(
+                  labelText: '챌린지 목표 *', hintText: '예: 자막 없이 영화 한 편 보기'),
               validator: (v) => (v?.isEmpty ?? true) ? '목표를 입력하세요.' : null,
             ),
             const SizedBox(height: 16),
             TextFormField(
               controller: _descriptionController,
-              decoration: const InputDecoration(labelText: '챌린지 설명 (선택)', alignLabelWithHint: true, hintText: '어떻게 인증할지 등 구체적인 내용을 적어주세요.'),
+              decoration: const InputDecoration(labelText: '챌린지 설명 (선택)',
+                  alignLabelWithHint: true,
+                  hintText: '어떻게 인증할지 등 구체적인 내용을 적어주세요.'),
               maxLines: 4,
             ),
             const SizedBox(height: 24),
+
+            // ▼▼▼ [수정 필요] 이 부분이 추가되어야 합니다. ▼▼▼
+            TextFormField(
+              controller: _typeController, // 1. 새 컨트롤러 연결
+              decoration: const InputDecoration(labelText: '챌린지 타입 *',
+                  hintText: 'conversation, grammar, pronunciation 중 하나'),
+              validator: (v) => (v?.isEmpty ?? true) ? '타입을 입력하세요.' : null,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _targetValueController, // 2. 새 컨트롤러 연결
+              decoration: const InputDecoration(labelText: '목표값 (분 또는 횟수) *'),
+              keyboardType: TextInputType.number,
+              validator: (v) {
+                if (v == null || v.isEmpty) return '목표값을 입력하세요.';
+                if (int.tryParse(v) == null || int.parse(v) <= 0)
+                  return '1 이상을 입력하세요.';
+                return null;
+              },
+            ),
+            // ▲▲▲ [수정 필요] 여기까지 추가 ▲▲▲
+
+            const SizedBox(height: 16), // 3. 간격 추가
             TextFormField(
               controller: _durationController,
               decoration: const InputDecoration(labelText: '챌린지 기간 (일) *'),
               keyboardType: TextInputType.number,
               validator: (v) {
                 if (v == null || v.isEmpty) return '기간을 입력하세요.';
-                if (int.tryParse(v) == null || int.parse(v) <= 0) return '1일 이상을 입력하세요.';
+                if (int.tryParse(v) == null || int.parse(v) <= 0)
+                  return '1일 이상을 입력하세요.';
                 return null;
               },
             ),
             const SizedBox(height: 32),
             ElevatedButton(
               onPressed: _isLoading ? null : _createChallenge,
-              child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('챌린지 시작하기'),
+              child: _isLoading ? const CircularProgressIndicator(
+                  color: Colors.white) : const Text('챌린지 시작하기'),
             ),
           ],
         ),

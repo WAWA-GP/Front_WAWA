@@ -1650,14 +1650,19 @@ class ApiService {
     required String title,
     required String description,
     required int durationDays,
+    required String challengeType, // 👈 이 줄 추가
+    required int targetValue,     // 👈 이 줄 추가
   }) async {
     final url = Uri.parse('$_authPlanStatsBaseUrl/api/study-groups/$groupId/challenges');
     final headers = await _getAuthHeaders();
-    // challenge_type, target_value 제거
+
+    // ▼▼▼ 2. JSON body에 새 필드 추가 ▼▼▼
     final body = jsonEncode({
       'title': title,
       'description': description,
       'duration_days': durationDays,
+      'challenge_type': challengeType, // 👈 이 줄 추가
+      'target_value': targetValue,     // 👈 이 줄 추가
     });
     final response = await http.post(url, headers: headers, body: body).timeout(_timeoutDuration);
     // 반환 모델도 새로운 GroupChallenge.fromJson으로 변경 (이 부분은 이전 답변에서 누락되었을 수 있습니다)
