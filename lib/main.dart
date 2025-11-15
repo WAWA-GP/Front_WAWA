@@ -13375,8 +13375,6 @@ class _ChallengeCreateScreenState extends State<ChallengeCreateScreen> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _durationController = TextEditingController(text: '7');
-  final _typeController = TextEditingController(text: 'conversation');
-  final _targetValueController = TextEditingController(text: '10');
 
   bool _isLoading = false;
   final ApiService _apiService = ApiService();
@@ -13400,8 +13398,6 @@ class _ChallengeCreateScreenState extends State<ChallengeCreateScreen> {
         title: _titleController.text,
         description: _descriptionController.text,
         durationDays: int.parse(_durationController.text),
-        challengeType: _typeController.text,
-        targetValue: int.parse(_targetValueController.text),
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -13442,29 +13438,6 @@ class _ChallengeCreateScreenState extends State<ChallengeCreateScreen> {
               maxLines: 4,
             ),
             const SizedBox(height: 24),
-
-            // ▼▼▼ [수정 필요] 이 부분이 추가되어야 합니다. ▼▼▼
-            TextFormField(
-              controller: _typeController, // 1. 새 컨트롤러 연결
-              decoration: const InputDecoration(labelText: '챌린지 타입 *',
-                  hintText: 'conversation, grammar, pronunciation 중 하나'),
-              validator: (v) => (v?.isEmpty ?? true) ? '타입을 입력하세요.' : null,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _targetValueController, // 2. 새 컨트롤러 연결
-              decoration: const InputDecoration(labelText: '목표값 (분 또는 횟수) *'),
-              keyboardType: TextInputType.number,
-              validator: (v) {
-                if (v == null || v.isEmpty) return '목표값을 입력하세요.';
-                if (int.tryParse(v) == null || int.parse(v) <= 0)
-                  return '1 이상을 입력하세요.';
-                return null;
-              },
-            ),
-            // ▲▲▲ [수정 필요] 여기까지 추가 ▲▲▲
-
-            const SizedBox(height: 16), // 3. 간격 추가
             TextFormField(
               controller: _durationController,
               decoration: const InputDecoration(labelText: '챌린지 기간 (일) *'),

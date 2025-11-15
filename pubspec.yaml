@@ -83,5 +83,5 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/all.png" # 👈 1단계에서 준비한 아이콘 이미지 경로
-  min_sdk_android: 21 # 안드로이드 최소 SDK 버전 (보통 21)
+  image_path: "assets/all.png"
+  min_sdk_android: 21

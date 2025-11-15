@@ -62,7 +62,7 @@
             <string>Editor</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>com.example.gradu</string>
+                <string>com.songhyoeun.learningapp</string>
             </array>
         </dict>
     </array>

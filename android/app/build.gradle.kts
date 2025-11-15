@@ -14,7 +14,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.example.graduation"
+    namespace = "com.songhyoeun.learningapp"
     compileSdk = findProperty("flutter.compileSdkVersion")?.toString()?.toInt() ?: 36
     ndkVersion = "27.0.12077973"
 
@@ -28,12 +28,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.graduation"
+        applicationId = "com.songhyoeun.learningapp"
         minSdk = 24
         targetSdk = findProperty("flutter.targetSdkVersion")?.toString()?.toInt() ?: 36
         versionCode = findProperty("flutter.versionCode")?.toString()?.toInt() ?: 1
         versionName = findProperty("flutter.versionName")?.toString() ?: "1.0.0"
-        manifestPlaceholders["appAuthRedirectScheme"] = "com.example.gradu"
+        manifestPlaceholders["appAuthRedirectScheme"] = "com.songhyoeun.learningapp"
     }
 
     signingConfigs {
