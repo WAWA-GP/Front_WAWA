@@ -16,6 +16,7 @@ import 'dart:typed_data';
 import 'package:image_picker/image_picker.dart';
 import 'models/attendance_model.dart';
 import 'models/community_model.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:learning_app/models/learning_progress_model.dart';
 import 'models/faq_model.dart';
 import 'pronunciation_analysis_result.dart';
@@ -26,6 +27,7 @@ import 'package:learning_app/models/user_profile.dart';
 import 'package:learning_app/models/point_history_model.dart';
 import 'package:learning_app/models/statistics_model.dart';
 import 'package:learning_app/models/grammar_history_model.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:learning_app/models/study_group_model.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:learning_app/models/attendance_model.dart';
@@ -36,6 +38,32 @@ import 'package:learning_app/models/wordbook_model.dart';
 import 'package:learning_app/models/user_word_model.dart';
 import 'package:learning_app/models/challenge_model.dart';
 import 'package:app_links/app_links.dart';
+
+List<TextSpan> buildFeedbackSpans(String text) {
+  final List<TextSpan> spans = [];
+  // 정규식을 **(모든 문자)** 로 수정
+  final RegExp exp = RegExp(r'\*\*(.*?)\*\*');
+  int start = 0;
+
+  for (final Match match in exp.allMatches(text)) {
+    // 1. ** 앞의 일반 텍스트 추가
+    if (match.start > start) {
+      spans.add(TextSpan(text: text.substring(start, match.start)));
+    }
+    // 2. ** 사이의 텍스트를 볼드체로 추가
+    spans.add(TextSpan(
+      text: match.group(1),
+      style: const TextStyle(fontWeight: FontWeight.bold), // 👈 볼드 스타일
+    ));
+    start = match.end;
+  }
+
+  // 3. ** 뒤의 나머지 텍스트 추가
+  if (start < text.length) {
+    spans.add(TextSpan(text: text.substring(start)));
+  }
+  return spans;
+}
 
 // 앱의 어느 곳에서든 화면 전환(Navigation)을 제어하기 위한 키
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -2238,7 +2266,7 @@ class _HomePageContentState extends State<HomePageContent> with AutomaticKeepAli
                           text: TextSpan(
                             style: TextStyle(fontSize: 14, color: Colors.grey.shade700, fontFamily: 'Pretendard'),
                             children: <TextSpan>[
-                              const TextSpan(text: '학습 언어: '),
+                              const TextSpan(text: '회화 학습 언어: '),
                               TextSpan(text: learningLanguage, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
                             ],
                           ),
@@ -2746,12 +2774,12 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.menu_book_outlined, color: Colors.blue),
-              title: const Text('총 문법 연습'),
+              title: const Text('총 문법 학습'),
               trailing: Text('${overall.totalGrammarCount} 회', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
             ListTile(
               leading: const Icon(Icons.mic_none, color: Colors.green),
-              title: const Text('총 발음 연습'),
+              title: const Text('총 발음 학습'),
               trailing: Text('${overall.totalPronunciationCount} 회', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ],
@@ -4444,8 +4472,8 @@ class _StudyScreenState extends State<StudyScreen> with TickerProviderStateMixin
         TabBar(
           controller: _tabController,
           tabs: const [
-            Tab(icon: Icon(Icons.mic), text: '발음 연습'),
-            Tab(icon: Icon(Icons.menu_book), text: '문법 연습'),
+            Tab(icon: Icon(Icons.mic), text: '발음 학습'),
+            Tab(icon: Icon(Icons.menu_book), text: '문법 학습'),
           ],
         ),
         Expanded(
@@ -4800,7 +4828,7 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
               child: ListTile(
                 leading: const Icon(Icons.history, color: Colors.green),
                 title: const Text('발음 분석 이력 보기'),
-                subtitle: const Text('지금까지의 발음 연습 기록을 확인하세요'),
+                subtitle: const Text('지금까지의 발음 학습 기록을 확인하세요'),
                 trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                 onTap: () {
                   Navigator.push(
@@ -4912,27 +4940,6 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
             if (_errorMessage != null && !isBusy && !isRecording)
               Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
 
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                GestureDetector(
-                  onTap: () => setState(() => isStarred = !isStarred),
-                  child: Icon(
-                    isStarred ? Icons.star : Icons.star_border,
-                    color: isStarred ? Colors.orange : Colors.grey,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                GestureDetector(
-                  onTap: () => setState(() => isBookmarked = !isBookmarked),
-                  child: Icon(
-                    isBookmarked ? Icons.bookmark : Icons.bookmark_border,
-                    color: isBookmarked ? Colors.orange : Colors.grey,
-                  ),
-                ),
-              ],
-            ),
             const SizedBox(height: 24),
 
             if (_analysisResult != null && !_isLoadingAnalysis)
@@ -4958,13 +4965,26 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
             Center(
               child: _buildScoreIndicator("종합 점수", result.overallScore, Colors.blue),
             ),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+            const SizedBox(height: 24),
+            Column(
               children: [
-                _buildScoreIndicator("음높이", result.pitchScore, Colors.orange),
-                _buildScoreIndicator("리듬", result.rhythmScore, Colors.green),
-                _buildScoreIndicator("강세", result.stressScore, Colors.red),
+                // 첫 번째 줄: 유창성, 음높이
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildScoreIndicator("유창성", result.fluencyScore, Colors.purple),
+                    _buildScoreIndicator("음높이", result.pitchScore, Colors.orange),
+                  ],
+                ),
+                const SizedBox(height: 20), // 줄 사이의 세로 간격
+                // 두 번째 줄: 리듬, 강세
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildScoreIndicator("리듬", result.rhythmScore, Colors.green),
+                    _buildScoreIndicator("강세", result.stressScore, Colors.red),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 24),
@@ -5021,7 +5041,13 @@ class _PronunciationPracticeTabState extends State<PronunciationPracticeTab> wit
         const SizedBox(height: 8),
         ...items.map((item) => Padding(
           padding: const EdgeInsets.only(left: 28, bottom: 4),
-          child: Text("• $item", style: const TextStyle(fontSize: 14)),
+          child: RichText(
+            text: TextSpan(
+              // 기본 스타일
+              style: const TextStyle(fontSize: 16, color: Colors.black, fontFamily: 'Pretendard', height: 1.4),
+              children: buildFeedbackSpans("• $item"), // 👈 1단계에서 만든 공용 함수 호출
+            ),
+          ),
         )).toList(),
       ],
     );
@@ -5046,7 +5072,8 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
   String? _selectedAnswer;
   String? _errorMessage;
   String _fillBlank(String originalText, String newText) {
-    return originalText.replaceAll('____', '**$newText**'); // 강조 표시를 위해 ** 사용
+    final RegExp blankRegex = RegExp(r'_{1,}');
+    return originalText.replaceAll(blankRegex, '**$newText**');
   }
 
   // 피드백 UI를 제어하기 위한 변수들
@@ -5246,7 +5273,7 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
         Card(
           child: ListTile(
             leading: const Icon(Icons.history, color: Colors.blue),
-            title: const Text('문법 연습 이력 보기'),
+            title: const Text('문법 학습 이력 보기'),
             trailing: const Icon(Icons.arrow_forward_ios, size: 16),
             onTap: () {
               Navigator.push(context, MaterialPageRoute(builder: (context) => const GrammarHistoryScreen()));
@@ -5359,9 +5386,12 @@ class _GrammarPracticeScreenState extends State<GrammarPracticeScreen> with Auto
               ],
             ),
             const Divider(height: 24),
-            Text(
-              _explanation ?? '해설을 불러올 수 없습니다.',
-              style: const TextStyle(fontSize: 16, height: 1.5),
+            MarkdownBody(
+              data: _explanation ?? '해설을 불러올 수 없습니다.',
+              styleSheet: MarkdownStyleSheet(
+                p: const TextStyle(fontSize: 16, height: 1.5, fontFamily: 'Pretendard'),
+                strong: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         ),
@@ -7894,9 +7924,17 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       margin: const EdgeInsets.only(top: 12),
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
-        title: Text(
-          question.text.replaceAll('____', '...'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        title: RichText(
+          text: TextSpan(
+            // RichText에 기본 스타일 적용
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: Colors.black, // 👈 색상 지정 필수
+              fontFamily: 'Pretendard',
+            ),
+            children: buildFeedbackSpans(question.text.replaceAll('____', '...')),
+          ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -7921,17 +7959,34 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       margin: const EdgeInsets.only(top: 12),
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
-        title: Text(
-          historyItem.correctedText,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        title: RichText(
+          text: TextSpan(
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: Colors.black, // 👈 색상 지정 필수
+              fontFamily: 'Pretendard',
+            ),
+            children: buildFeedbackSpans(historyItem.correctedText),
+          ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 8.0),
-          child: Text(
-            '제출: ${historyItem.transcribedText}',
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+          child: RichText(
+            text: TextSpan(
+              style: TextStyle( // 👈 기본 스타일
+                color: Colors.grey.shade600,
+                fontSize: 13,
+                fontFamily: 'Pretendard',
+              ),
+              children: [
+                const TextSpan(text: '제출: '),
+                // '제출:' 뒤에 오는 텍스트에만 buildFeedbackSpans 적용
+                ...buildFeedbackSpans(historyItem.transcribedText),
+              ],
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -8381,7 +8436,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
           children: [
             const SizedBox(height: 20),
             const Text(
-              '공부하고 싶은 언어를\n선택하세요',
+              '회화 학습에서 공부하고 싶은\n언어를 선택하세요',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
@@ -8613,14 +8668,14 @@ class _GoalSettingScreenState extends State<GoalSettingScreen> {
           ),
           const Divider(height: 40),
           _buildSliderSection(
-              '문법 연습 횟수 (회)',
+              '문법 학습 횟수 (회)',
               _grammarCount,
                   (val) => setState(() => _grammarCount = val),
               min: 0, max: 20, divisions: 20
           ),
           const Divider(height: 40),
           _buildSliderSection(
-              '발음 연습 횟수 (회)',
+              '발음 학습 횟수 (회)',
               _pronunciationCount,
                   (val) => setState(() => _pronunciationCount = val),
               min: 0, max: 20, divisions: 20
@@ -9452,7 +9507,7 @@ class _CharacterSelectionScreenState extends State<CharacterSelectionScreen> {
             children: [
               const SizedBox(height: 40),
               const Text(
-                '공부를\n함께 하고싶은 캐릭터를\n선택하세요',
+                '공부를 함께 하고싶은 \n캐릭터를 선택하세요',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
@@ -9960,7 +10015,7 @@ class _StudyGroupDetailScreenState extends State<StudyGroupDetailScreen>
           tabs: const [
             Tab(icon: Icon(Icons.people_outline), text: "참여자"),
             Tab(icon: Icon(Icons.emoji_events_outlined), text: "챌린지"),
-            Tab(icon: Icon(Icons.chat_bubble_outline), text: "커뮤니티"),
+            Tab(icon: Icon(Icons.chat_bubble_outline), text: "채팅"),
           ],
         )
             : null,
@@ -11205,6 +11260,7 @@ class _PronunciationHistoryScreenState extends State<PronunciationHistoryScreen>
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _buildStatItem('평균', stats.averageOverall, Colors.blue),
+                    _buildStatItem('정확도', stats.averagePhoneme, Colors.teal),
                     _buildStatItem('음높이', stats.averagePitch, Colors.orange),
                     _buildStatItem('리듬', stats.averageRhythm, Colors.green),
                     _buildStatItem('강세', stats.averageStress, Colors.red),
@@ -11308,7 +11364,7 @@ class _PronunciationHistoryScreenState extends State<PronunciationHistoryScreen>
                 Icon(Icons.mic_none, size: 80, color: Colors.grey.shade400),
                 const SizedBox(height: 16),
                 const Text(
-                  '아직 발음 연습 기록이 없습니다.\n학습 화면에서 발음 연습을 시작해보세요!',
+                  '아직 발음 학습 기록이 없습니다.\n학습 화면에서 발음 학습을 시작해보세요!',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 16, color: Colors.grey),
                 ),
@@ -11375,6 +11431,7 @@ class _PronunciationHistoryScreenState extends State<PronunciationHistoryScreen>
                 spacing: 8,
                 runSpacing: 8,
                 children: [
+                  _buildMiniScore('정확도', item.phonemeScore, Colors.teal),
                   _buildMiniScore('음높이', item.pitchScore, Colors.orange),
                   _buildMiniScore('리듬', item.rhythmScore, Colors.green),
                   _buildMiniScore('강세', item.stressScore, Colors.red),
@@ -11532,7 +11589,7 @@ class _PronunciationHistoryDetailScreenState extends State<PronunciationHistoryD
                 const Icon(Icons.text_fields, color: Colors.blue),
                 const SizedBox(width: 8),
                 const Text(
-                  '연습한 문장',
+                  '학습한 문장',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
               ],
@@ -11572,6 +11629,8 @@ class _PronunciationHistoryDetailScreenState extends State<PronunciationHistoryD
             ),
             const SizedBox(height: 20),
             _buildScoreIndicator('종합 점수', widget.history.overallScore, Colors.blue),
+            const SizedBox(height: 16),
+            _buildScoreIndicator('정확도', widget.history.phonemeScore, Colors.teal),
             const SizedBox(height: 16),
             _buildScoreIndicator('음높이', widget.history.pitchScore, Colors.orange),
             const SizedBox(height: 16),
@@ -11675,9 +11734,11 @@ class _PronunciationHistoryDetailScreenState extends State<PronunciationHistoryD
                   children: [
                     const Text('• ', style: TextStyle(fontSize: 16)),
                     Expanded(
-                      child: Text(
-                        feedback,
-                        style: const TextStyle(fontSize: 14, height: 1.5),
+                      child: RichText(
+                        text: TextSpan(
+                          style: const TextStyle(fontSize: 16, color: Colors.black, fontFamily: 'Pretendard', height: 1.4),
+                          children: buildFeedbackSpans(feedback), // 👈 1단계에서 만든 공용 함수 호출
+                        ),
                       ),
                     ),
                   ],
@@ -11716,9 +11777,11 @@ class _PronunciationHistoryDetailScreenState extends State<PronunciationHistoryD
                   children: [
                     const Text('💡 ', style: TextStyle(fontSize: 16)),
                     Expanded(
-                      child: Text(
-                        suggestion,
-                        style: const TextStyle(fontSize: 14, height: 1.5),
+                      child: RichText(
+                        text: TextSpan(
+                          style: const TextStyle(fontSize: 16, color: Colors.black, fontFamily: 'Pretendard', height: 1.4),
+                          children: buildFeedbackSpans(suggestion), // 👈 1단계에서 만든 공용 함수 호출
+                        ),
                       ),
                     ),
                   ],
@@ -12063,7 +12126,7 @@ class _GrammarHistoryScreenState extends State<GrammarHistoryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('문법 연습 이력'),
+        title: const Text('문법 학습 이력'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -12126,7 +12189,7 @@ class _GrammarHistoryScreenState extends State<GrammarHistoryScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildStatItem('총 연습', stats.totalCount.toDouble(), '회', Colors.black87),
+                _buildStatItem('총 학습', stats.totalCount.toDouble(), '회', Colors.black87),
                 _buildStatItem('정답', stats.correctCount.toDouble(), '회', Colors.green),
                 _buildStatItem('오답', stats.incorrectCount.toDouble(), '회', Colors.orange),
               ],
@@ -12178,7 +12241,7 @@ class _GrammarHistoryScreenState extends State<GrammarHistoryScreen> {
   // [수정] 히스토리 목록 위젯은 이제 파라미터로 데이터를 받음
   Widget _buildHistoryList(List<GrammarHistory> history) {
     if (history.isEmpty) {
-      return const Center(child: Text('문법 연습 기록이 없습니다.'));
+      return const Center(child: Text('문법 학습 기록이 없습니다.'));
     }
 
     final correctItems = history.where((item) => item.isCorrect).toList();
@@ -12313,7 +12376,12 @@ class _GrammarHistoryScreenState extends State<GrammarHistoryScreen> {
                     const SizedBox(height: 8),
                     ...item.grammarFeedback.map((fb) => Padding(
                       padding: const EdgeInsets.only(bottom: 4.0),
-                      child: Text("• $fb"),
+                      child: RichText(
+                        text: TextSpan(
+                          style: const TextStyle(color: Colors.black, fontFamily: 'Pretendard'), // 기본 스타일
+                          children: buildFeedbackSpans("• $fb"), // 👈 1단계에서 만든 공용 함수 호출
+                        ),
+                      ),
                     )),
                   ],
                 ),
@@ -14012,7 +14080,18 @@ class _IncorrectGrammarHistoryScreenState extends State<IncorrectGrammarHistoryS
                     const SizedBox(height: 8),
                     ...item.grammarFeedback.map((fb) => Padding(
                       padding: const EdgeInsets.only(bottom: 4.0),
-                      child: Text("• $fb"),
+                      child: RichText(
+                        text: TextSpan(
+                          // RichText에 기본 스타일 적용
+                          style: const TextStyle(
+                            fontSize: 14, // 기본 Text 위젯과 폰트 크기 맞춤
+                            color: Colors.black,
+                            fontFamily: 'Pretendard',
+                            height: 1.5,
+                          ),
+                          children: buildFeedbackSpans("• $fb"), // 공용 함수 호출
+                        ),
+                      ),
                     )),
                   ],
                 ),
@@ -14099,7 +14178,7 @@ const String termsOfServiceContent = """
 제4조 (서비스의 제공 등)
 1. 회사는 회원에게 아래와 같은 서비스를 제공합니다.
    가. 다국어 학습 콘텐츠 제공 서비스
-   나. 발음 교정 및 문법 연습 서비스
+   나. 발음 교정 및 문법 학습 서비스
    다. 커뮤니티 서비스 (게시판, 스터디 그룹 등)
    라. 기타 "회사"가 추가 개발하거나 다른 회사와의 제휴계약 등을 통해 "회원"에게 제공하는 일체의 서비스
 2. 회사는 컴퓨터 등 정보통신설비의 보수점검, 교체 및 고장, 통신두절 또는 운영상 상당한 이유가 있는 경우 서비스의 제공을 일시적으로 중단할 수 있습니다.

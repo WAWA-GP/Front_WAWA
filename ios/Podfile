@@ -1,6 +1,6 @@
 # Uncomment this line to define a global platform for your project
 # platform :ios, '13.0'
-
+platform :ios, '13.0'
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
@@ -38,8 +38,12 @@ target 'Runner' do
   post_install do |installer|
     installer.pods_project.targets.each do |target|
       flutter_additional_ios_build_settings(target)
-      # 마이크 권한을 사용하도록 명시하는 코드 추가
+
       target.build_configurations.each do |config|
+        # iOS 배포 타겟을 13.0으로 강제 설정 (이 줄이 추가됨)
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+
+        # 마이크 권한을 사용하도록 명시하는 코드 (기존 코드)
         config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
           '$(inherited)',
           'PERMISSION_MICROPHONE=1',

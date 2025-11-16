@@ -4,6 +4,7 @@ class PronunciationAnalysisResult {
   final double rhythmScore;
   final double stressScore;
   final double fluencyScore;
+  final double phonemeScore;
   final List<String> detailedFeedback;
   final List<String> suggestions;
   final String grade;
@@ -16,6 +17,7 @@ class PronunciationAnalysisResult {
     required this.rhythmScore,
     required this.stressScore,
     required this.fluencyScore,
+    required this.phonemeScore,
     required this.detailedFeedback,
     required this.suggestions,
     required this.grade,
@@ -32,6 +34,7 @@ class PronunciationAnalysisResult {
       rhythmScore: (json['rhythm_score'] as num?)?.toDouble() ?? 0.0,
       stressScore: (json['stress_score'] as num?)?.toDouble() ?? 0.0,
       fluencyScore: (json['fluency_score'] as num?)?.toDouble() ?? 0.0,
+      phonemeScore: (json['phoneme_score'] as num? ?? 0.0).toDouble(),
       detailedFeedback: List<String>.from(json['detailed_feedback'] ?? []),
       suggestions: List<String>.from(json['suggestions'] ?? []),
       grade: json['grade'] as String? ?? 'N/A',

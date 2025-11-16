@@ -6,6 +6,7 @@ class PronunciationHistory {
   final double pitchScore;
   final double rhythmScore;
   final double stressScore;
+  final double phonemeScore;
   final double? fluencyScore;
   final double? confidence;
   final String? rateStatus;
@@ -23,7 +24,8 @@ class PronunciationHistory {
     required this.pitchScore,
     required this.rhythmScore,
     required this.stressScore,
-    this.fluencyScore,
+    required this.fluencyScore,
+    required this.phonemeScore,
     this.confidence,
     this.rateStatus,
     this.fluencyStatus,
@@ -42,6 +44,7 @@ class PronunciationHistory {
       pitchScore: (json['pitch_score'] as num).toDouble(),
       rhythmScore: (json['rhythm_score'] as num).toDouble(),
       stressScore: (json['stress_score'] as num).toDouble(),
+      phonemeScore: (json['phoneme_score'] as num? ?? 0.0).toDouble(),
       fluencyScore: json['fluency_score'] != null
           ? (json['fluency_score'] as num).toDouble()
           : null,
@@ -67,6 +70,7 @@ class PronunciationStatistics {
   final double averageRhythm;
   final double averageStress;
   final double averageFluency;
+  final double averagePhoneme;
   final double? recentImprovement;
 
   PronunciationStatistics({
@@ -76,6 +80,7 @@ class PronunciationStatistics {
     required this.averageRhythm,
     required this.averageStress,
     required this.averageFluency,
+    required this.averagePhoneme,
     this.recentImprovement,
   });
 
@@ -87,6 +92,7 @@ class PronunciationStatistics {
       averageRhythm: (json['average_rhythm'] as num).toDouble(),
       averageStress: (json['average_stress'] as num).toDouble(),
       averageFluency: (json['average_fluency'] as num).toDouble(),
+      averagePhoneme: (json['average_phoneme'] as num? ?? 0.0).toDouble(),
       recentImprovement: json['recent_improvement'] != null
           ? (json['recent_improvement'] as num).toDouble()
           : null,

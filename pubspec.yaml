@@ -29,6 +29,8 @@ dependencies:
   app_links: ^6.1.1
   flutter_localizations:
     sdk: flutter
+  flutter_markdown: ^0.7.7+1
+  flutter_dotenv: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -79,6 +81,7 @@ flutter:
     - assets/item_together.png
     - assets/item_twosome_cake.png
     - assets/item_vita500.png
+
 
 flutter_launcher_icons:
   android: true

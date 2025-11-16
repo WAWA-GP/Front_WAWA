@@ -17,8 +17,13 @@ import 'package:learning_app/models/grammar_history_model.dart';
 import 'package:learning_app/models/learning_progress_model.dart';
 import 'package:learning_app/models/user_word_model.dart';
 import 'package:learning_app/models/challenge_model.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'models/point_history_model.dart';
+
+final String BACKEND_URL = dotenv.env['BACKEND_URL'] ?? 'http://fallback-url.com';
+final String AI_BACKEND_URL = dotenv.env['AI_BACKEND_URL'] ?? 'http://fallback-ai-url.com';
+
 
 // API 통신 중 발생하는 예외를 처리하기 위한 클래스
 class ApiException implements Exception {
@@ -57,6 +62,7 @@ class ApiService {
       'AI_BACKEND_URL',
       defaultValue: 'http://15.165.136.44:8000'
   );
+
 
   static const Duration _timeoutDuration = Duration(seconds: 30);
 
